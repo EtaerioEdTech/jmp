@@ -1,4 +1,4 @@
-/* Layout: left pane for library tree, right pane for player.
+/* Two full-screen modes — Browser and Player — shown one at a time.
    Styling is deliberately minimal so the app feels like part of the
    terminal rather than a boxed-in application: transparent backgrounds
    (the terminal's own theme shows through) and no solid frames. */
@@ -7,37 +7,23 @@ Screen {
     background: transparent;
 }
 
-#left-pane {
-    width: 42%;
-    /* A faint vertical rule instead of a solid border box. */
-    border-right: vkey #333;
-    padding: 0 1;
-}
-
-#right-pane {
-    width: 58%;
-    padding: 0 1;
-}
-
-Tree {
-    height: 100%;
+/* Pure-text library browser, full screen. */
+#browser {
+    width: 100%;
+    height: 1fr;
+    padding: 1 2;
     background: transparent;
-    color: #d0d0d0;
 }
 
-Tree > .tree--cursor {
-    background: #3a3aaf;
-    color: #ffffff;
+/* Player, full screen, shown once a track is chosen. */
+#player {
+    width: 100%;
+    height: 1fr;
+    padding: 1 2;
 }
 
-Tree > .tree--label {
-    color: #d0d0d0;
-}
-
-/* Sections separated by spacing, not full-width rules. */
 #now-playing {
     height: 4;
-    padding: 1 0 0 0;
 }
 
 #visualizer {
@@ -47,7 +33,6 @@ Tree > .tree--label {
 
 #progress {
     height: 3;
-    padding: 0 0 1 0;
 }
 
 /* Footer reads as a hint line, not a status bar. */

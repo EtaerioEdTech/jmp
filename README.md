@@ -1,17 +1,23 @@
 # ASCII Music Player
 
-A terminal music player with a nested library browser, a progress bar, and a real-time frequency visualizer, all rendered in ASCII / Unicode block characters.
+A terminal music player with a pure-text, SSH-menu-style library browser, a
+progress bar, and a real-time frequency visualizer, all rendered in ASCII /
+Unicode block characters.
+
+Two full-screen modes, shown one at a time. Browse the library with the arrow
+keys; pick a track and the browser gives way to the player. Press `b` to go
+back and pick another.
 
 ```
-♪ Library                        │  ▶  Kid A
-├── Radiohead                    │      Radiohead  ·  Kid A
-│   ├── Kid A  (2000)            │  ─────────────────────────
-│   │   ├── 01. Everything...    │
-│   │   ├── 02. Kid A            │       █
-│   │   └── ...                  │     █ █   █
-│   └── OK Computer  (1997)      │   █ █ █ █ █ █
-└── ...                          │   █ █ █ █ █ █ █
-                                 │   1:23 ████────── 4:12
+BROWSER                            PLAYER
+
+ARTISTS                              ▶  Kid A
+                                         Radiohead  ·  Kid A
+› Radiohead                    →
+  Aphex Twin                             █ █   █
+  Boards of Canada                     █ █ █ █ █ █
+                                       █ █ █ █ █ █ █
+↑↓ move   ↵ open   q quit             1:23 ████────── 4:12
 ```
 
 ## Setup
@@ -39,23 +45,32 @@ python run.py /path/to/music     # scans a specific directory
 
 ## Controls
 
-| Key         | Action           |
-|-------------|------------------|
-| ↑ / ↓       | Move in library  |
-| ← / →       | Collapse / expand folders |
-| Enter       | Play track (or first track of album) |
-| Space       | Pause / resume   |
-| `n`         | Next track       |
-| `p`         | Previous track   |
-| `+` / `-`   | Volume up / down |
-| `q`         | Quit             |
+**Browser** (Artist → Album → Track drill-down):
+
+| Key           | Action                    |
+|---------------|---------------------------|
+| ↑ / ↓         | Move up / down the list   |
+| Enter         | Open (drill in) / play track |
+| ← / Backspace | Back up a level           |
+
+**Player:**
+
+| Key         | Action                       |
+|-------------|------------------------------|
+| `b`         | Back to the browser          |
+| Space       | Pause / resume               |
+| `n`         | Next track                   |
+| `p`         | Previous track               |
+| `+` / `-`   | Volume up / down             |
+| `q`         | Quit                         |
 
 ## How it works
 
 - **Library scan** (`library.py`): walks the music directory, reads ID3 / Vorbis / FLAC tags with `mutagen`, groups tracks into Artist → Album → Track.
+- **Browser** (`widgets.py`): a pure-text `Browser` widget renders a single-column list per level with a `›` cursor — no tree widget, no boxes. Enter drills Artists → Albums → Tracks; ← goes back up. Picking a track posts a message to the app.
+- **Modes** (`app.py`): the browser and player are two full-screen views toggled by `display`; only the active one is shown. Choosing a track hides the browser and shows the player; `b` returns.
 - **Playback** (`audio.py`): `pygame.mixer.music` streams the file from disk.
 - **Visualizer**: on load, `pydub` decodes the file to raw samples. NumPy computes a windowed FFT every 50 ms and bins the result into 32 log-spaced frequency bands (~40 Hz to 16 kHz). During playback the widget indexes into this precomputed spectrogram by `get_pos_ms()`.
-- **UI** (`app.py`, `widgets.py`): Textual handles the layout and key bindings. The visualizer widget uses `▄` and `█` half-block characters for double vertical resolution.
 
 ## Supported formats
 
