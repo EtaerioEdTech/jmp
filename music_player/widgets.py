@@ -32,6 +32,11 @@ class Browser(Widget, can_focus=True):
     ALBUMS = "albums"
     TRACKS = "tracks"
 
+    # A synthetic first row at the ARTISTS level that shuffles the whole
+    # library, presented as if it were an artist. Selecting it (Enter or `s`)
+    # plays every track in random order.
+    SHUFFLE_ALL_LABEL = "⤮  Shuffle All"
+
     class TrackChosen(Message):
         """Posted when the user picks a track to play."""
 
@@ -75,6 +80,24 @@ class Browser(Widget, can_focus=True):
     def _artists_sorted(self) -> list[str]:
         return sorted(self._library, key=str.lower)
 
+    def _on_shuffle_all(self) -> bool:
+        """True when the cursor is on the synthetic 'Shuffle All' row."""
+        return self._level == self.ARTISTS and self._cursor == 0
+
+    def _cursor_artist(self) -> str:
+        """The artist under the cursor at the ARTISTS level, accounting for the
+        'Shuffle All' row occupying index 0. Assumes not on the shuffle row."""
+        return self._artists_sorted()[self._cursor - 1]
+
+    def _all_tracks(self) -> list[Track]:
+        """Every track in the library, in no particular order."""
+        return [
+            t
+            for artist in self._library.values()
+            for album in artist.albums.values()
+            for t in album.tracks
+        ]
+
     def _albums_sorted(self) -> list[str]:
         artist = self._library[self._artist_name]
         return sorted(artist.albums, key=str.lower)
@@ -88,7 +111,8 @@ class Browser(Widget, can_focus=True):
             self._rows = []
             return
         if self._level == self.ARTISTS:
-            self._rows = self._artists_sorted()
+            # "Shuffle All" sits at the top, as if it were an artist.
+            self._rows = [self.SHUFFLE_ALL_LABEL] + self._artists_sorted()
         elif self._level == self.ALBUMS:
             rows = []
             for name in self._albums_sorted():
@@ -131,8 +155,11 @@ class Browser(Widget, can_focus=True):
         whole album, or (on a track) that track's album."""
         if not self._rows:
             return
+        if self._on_shuffle_all():
+            self._shuffle_all()
+            return
         if self._level == self.ARTISTS:
-            name = self._artists_sorted()[self._cursor]
+            name = self._cursor_artist()
             artist = self._library[name]
             tracks = [t for alb in artist.albums.values() for t in alb.tracks]
             scope = name
@@ -149,6 +176,14 @@ class Browser(Widget, can_focus=True):
         random.shuffle(shuffled)
         self.post_message(self.ShuffleChosen(shuffled, scope))
 
+    def _shuffle_all(self) -> None:
+        """Shuffle every track in the library."""
+        tracks = self._all_tracks()
+        if not tracks:
+            return
+        random.shuffle(tracks)
+        self.post_message(self.ShuffleChosen(tracks, "Shuffle All"))
+
     def _move(self, delta: int) -> None:
         if not self._rows:
             return
@@ -158,8 +193,11 @@ class Browser(Widget, can_focus=True):
     def _enter(self) -> None:
         if not self._rows:
             return
+        if self._on_shuffle_all():
+            self._shuffle_all()
+            return
         if self._level == self.ARTISTS:
-            self._artist_name = self._artists_sorted()[self._cursor]
+            self._artist_name = self._cursor_artist()
             self._level = self.ALBUMS
             self._cursor = 0
             self._rebuild_rows()
@@ -188,7 +226,9 @@ class Browser(Widget, can_focus=True):
         elif self._level == self.ALBUMS:
             self._level = self.ARTISTS
             artists = self._artists_sorted()
-            self._cursor = artists.index(self._artist_name) if self._artist_name in artists else 0
+            # +1 for the "Shuffle All" row occupying index 0; fall back to the
+            # first real artist (index 1) rather than the shuffle row.
+            self._cursor = artists.index(self._artist_name) + 1 if self._artist_name in artists else 1
             self._rebuild_rows()
             self.refresh()
         # At ARTISTS level, back does nothing.
@@ -204,8 +244,8 @@ class Browser(Widget, can_focus=True):
 
     def _hint(self) -> str:
         if self._level == self.ARTISTS:
-            return "↑↓ move   → open   s shuffle   q quit"
-        return "↑↓ move   → open   ← back   s shuffle"
+            return "↑↓ move   → open   s shuffle   d dir   q quit"
+        return "↑↓ move   → open   ← back   s shuffle   d dir"
 
     def render(self) -> Text:
         width = self.size.width
@@ -393,7 +433,7 @@ class ProgressBar(Widget):
 
 
 class Banner(Widget):
-    """Big "ARTIST - TRACK - ALBUM" title rendered in Braille bitmap text.
+    """Big "ARTIST - TRACK" title rendered in Braille bitmap text.
 
     When the title is wider than the widget it scrolls as a marquee (looping),
     otherwise it sits centered. Monochrome and transparent like the rest.
@@ -406,17 +446,18 @@ class Banner(Widget):
 
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
-        self._title = ""        # plain "ARTIST - TRACK - ALBUM" (centered case)
+        self._title = ""        # plain "ARTIST - TRACK" (centered case)
         self._loop = ""         # title + trailing separator (marquee unit)
         self._status = "stopped"
         self._scroll = 0.0
 
     def set_track(self, title: str, album: str, artist: str) -> None:
-        parts = [p for p in (artist, title, album) if p]
+        # `album` is accepted for API compatibility but no longer shown.
+        parts = [p for p in (artist, title) if p]
         self._title = self.SEP.join(parts)
         # The looping unit ends with the same separator, so when it wraps the
-        # album flows into the next artist with identical spacing — one even
-        # "ARTIST - TRACK - ALBUM - ARTIST - TRACK - ALBUM …" loop.
+        # title flows into the next repeat with identical spacing — one even
+        # "ARTIST - TRACK - ARTIST - TRACK …" loop.
         self._loop = self._title + self.SEP
         self._scroll = 0.0
         self.refresh()
@@ -449,7 +490,7 @@ class Banner(Widget):
             draw_text(canvas, self._title, x0, y0, self.SCALE)
         else:
             # Marquee: repeat the loop unit (title + trailing separator) and
-            # slide left, so the album is clearly spaced from the next artist.
+            # slide left, so the title is clearly spaced from the next repeat.
             period = text_width_dots(self._loop, self.SCALE)
             off = int(self._scroll) % period
             draw_text(canvas, self._loop, -off, y0, self.SCALE)
@@ -458,26 +499,53 @@ class Banner(Widget):
         return _canvas_to_text(canvas)
 
 
+_STYLES = ("dim", "default", "bold")
+
+
 def _canvas_to_text(canvas: Canvas) -> Text:
     """Turn a Braille Canvas into styled Text (transparent; dim→normal→bold by
-    per-cell dot density)."""
+    per-cell dot density).
+
+    Emits *run-length* spans — consecutive cells sharing a style become one
+    `Text.append` — instead of one append per cell. Rows are mostly empty or
+    uniform, so this collapses thousands of calls into a handful per row, which
+    keeps the frame rate up as the window (and canvas) grows.
+    """
     codes = canvas.codes()
     density = canvas.density()
-    styles = ("dim", "default", "bold")
+
+    # Map each cell to a style tier 0/1/2 (empty cells → tier 0, rendered as a
+    # space). Vectorized so the per-cell work happens in numpy, not Python.
+    empty = codes == 0
+    tier = np.where(density >= 5, 2, np.where(density >= 3, 1, 0)).astype(np.int8)
+    # Empty cells all share one "space" run regardless of density; give them a
+    # sentinel tier so they group together and never carry a style.
+    tier = np.where(empty, -1, tier)
+
+    # Precompute the glyph string for every cell once.
+    glyph_codes = (0x2800 + codes).astype(np.int32)
+
     result = Text()
-    for r in range(canvas.height):
+    height, width = canvas.height, canvas.width
+    for r in range(height):
         if r > 0:
             result.append("\n")
-        row_codes = codes[r]
-        row_den = density[r]
-        for c in range(canvas.width):
-            code = int(row_codes[c])
-            if code == 0:
-                result.append(" ")
+        row_tier = tier[r]
+        row_glyphs = glyph_codes[r]
+        row_empty = empty[r]
+        # Walk run-boundaries: a new run starts wherever the tier changes.
+        c = 0
+        while c < width:
+            t = row_tier[c]
+            end = c + 1
+            while end < width and row_tier[end] == t:
+                end += 1
+            if t == -1:  # empty run → spaces, no style
+                result.append(" " * (end - c))
             else:
-                d = row_den[c]
-                tier = 2 if d >= 5 else (1 if d >= 3 else 0)
-                result.append(chr(0x2800 + code), style=styles[tier])
+                segment = "".join(chr(int(g)) for g in row_glyphs[c:end])
+                result.append(segment, style=_STYLES[t])
+            c = end
     return result
 
 
