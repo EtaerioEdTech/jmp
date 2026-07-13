@@ -12,13 +12,13 @@ Escape) to go back and pick another; press `v` to cycle the visualizer.
 ```
 BROWSER                            PLAYER
 
-ARTISTS                              ⣸⣷  Kid A     ⟩ WAVEFORM
-⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿                                Radiohead · Kid A
-                                     ⣀⡠⠔⠒⠉⠉⠑⠢⢄⡀
-⣿ Radiohead                    →   ⣀⠔⠊         ⠈⠢⣀   ⡀
+ARTISTS                              ⣿⣿⣿  RADIOHEAD
+⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿                                everything in its right place
+⣿ ⤮  Shuffle All                     ⣀⡠⠔⠒⠉⠉⠑⠢⢄⡀
+  Radiohead                    →   ⣀⠔⠊         ⠈⠢⣀   ⡀
   Aphex Twin                     ⠊                 ⠑⠊ ⠈
   Boards of Canada                 1:23 ⣿⣿⣿⣿⣿⠉⠉⠉⠉⠉ 4:12
-↑↓ move   → open   q quit
+↑↓ move  → open  s shuffle  d dir  q quit
 ```
 
 ## Setup
@@ -61,7 +61,8 @@ python run.py [/path/to/music]
 | ↑ / ↓         | Move up / down the list             |
 | →             | Advance — drill in / play the track |
 | ← / Backspace | Retreat — back up a level           |
-| `S`           | Shuffle the highlighted folder (all of an artist's songs, or an album) |
+| `s`           | Shuffle the highlighted folder (all of an artist's songs, or an album). On the **Shuffle All** row at the top of the artist list, shuffles the whole library |
+| `d`           | Change the music directory (type a new root path) |
 
 **Player:**
 
@@ -79,11 +80,11 @@ python run.py [/path/to/music]
 
 - **Library scan** (`library.py`): walks the music directory, reads ID3 / Vorbis / FLAC tags with `mutagen`, groups tracks into Artist → Album → Track.
 - **Browser** (`widgets.py`): a pure-text `Browser` widget renders a single-column list per level with a Braille `⣿` cursor and a Braille rule under the heading — no tree widget, no boxes. → drills Artists → Albums → Tracks; ← goes back up. Picking a track posts a message to the app.
-- **Modes** (`app.py`): the browser and player are two full-screen views toggled by `display`; only the active one is shown. Choosing a track hides the browser and shows the player; `b`/Escape returns. Pressing `S` in the browser shuffles the highlighted folder (an artist's whole catalogue, or a single album) into a playlist.
-- **Banner** (`widgets.py`): the player's title is "ARTIST - TRACK - ALBUM" rendered big in a Braille bitmap font (`braille.py`), scrolling as a marquee when it's wider than the screen.
+- **Modes** (`app.py`): the browser and player are two full-screen views toggled by `display`; only the active one is shown. Choosing a track hides the browser and shows the player; `b`/Escape returns. Pressing `s` in the browser shuffles the highlighted folder (an artist's whole catalogue, or a single album) into a playlist; a **Shuffle All** row at the top of the artist list shuffles the whole library. `d` re-scans a new music directory in place.
+- **Banner** (`widgets.py`): the player's title is two stacked lines — the artist big, the track name half-size below it — rendered in a Braille bitmap font (`braille.py`). Each line is centered when it fits and scrolls as a marquee when it's wider than the screen.
 - **Braille rendering** (`braille.py`): a small `Canvas` rasterizes points/lines/bars into a 2×4-dots-per-cell sub-pixel grid (8× resolution) and packs each block into one Braille glyph, fully vectorized in NumPy. The visualizer, progress bar, browser cursor and play icons all use it, so the whole UI reads as one fine, futuristic, monochrome (transparent) system.
 - **Playback** (`audio.py`): `pygame.mixer.music` streams the file from disk.
-- **Visualizer**: on load, `pydub` decodes the file to raw samples. NumPy computes a windowed FFT every 50 ms into 32 log-spaced frequency bands (~40 Hz to 16 kHz), and keeps a downsampled copy of the raw waveform. During playback the widget indexes into these by `get_pos_ms()`. Press `v` to switch between two modes: **spectrum** (32-band frequency bars) and **mirror** (the spectrum reflected above and below a center line). Both are Braille-rendered and hold 30 fps, scaling their resolution to the terminal size.
+- **Visualizer**: on load, `pydub` decodes the file to raw samples and NumPy computes a windowed FFT every 50 ms into 32 log-spaced frequency bands (~40 Hz to 16 kHz). Analysis runs in a background thread in two passes — the opening seconds first, so the visualizer starts in step with playback — and the widget indexes into the spectrogram by `get_pos_ms()`. Press `v` to switch between two modes: **spectrum** (32-band frequency bars) and **mirror** (the spectrum reflected above and below a center line). Both are Braille-rendered and hold 30 fps, scaling their resolution to the terminal size.
 
 ## Supported formats
 
@@ -103,10 +104,10 @@ terminaltunes/
     ├── audio.py              # pygame + FFT + waveform
     ├── braille.py            # Braille sub-pixel canvas
     ├── library.py            # directory scan + tags
-    └── widgets.py            # Browser, Visualizer, ProgressBar, NowPlaying
+    └── widgets.py            # Browser, Visualizer, ProgressBar, Banner
 ```
 
 ## Notes
 
 - FFmpeg is required for the visualizer to analyze MP3 files. Playback works without it.
-- The spectrogram is computed in a background thread, so playback starts immediately and the visualizer catches up a moment later.
+- The spectrogram is computed in a background thread, opening seconds first, so the visualizer starts in step with playback rather than catching up after the whole track is analyzed.
