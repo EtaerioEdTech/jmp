@@ -73,8 +73,8 @@ class MusicPlayerApp(App):
     def on_mount(self) -> None:
         # Start in the browser; the player is hidden until a track is chosen.
         self._show_browser()
-        # ~15 fps: fast enough for a smooth visualizer, light on CPU.
-        self.set_interval(1 / 15, self._tick)
+        # 30 fps: smooth, light motion for the flowing visualizer.
+        self.set_interval(1 / 30, self._tick)
 
     # ---- mode switching ----
 

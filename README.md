@@ -1,8 +1,8 @@
 # ASCII Music Player
 
 A terminal music player with a pure-text, SSH-menu-style library browser, a
-progress bar, and a real-time frequency visualizer, all rendered in ASCII /
-Unicode block characters.
+progress bar, and a real-time, high-resolution Braille visualizer that draws a
+flowing harmonograph curve reacting to the music.
 
 Two full-screen modes, shown one at a time. Browse the library with the arrow
 keys; pick a track and the browser gives way to the player. Press `b` to go
@@ -13,9 +13,9 @@ BROWSER                            PLAYER
 
 ARTISTS                              ▶  Kid A
                                          Radiohead  ·  Kid A
-› Radiohead                    →       : ! | ┃ █ ┃ | ! :
-  Aphex Twin                           ━ ═ █ ═ █ ═ █ ═ ━
-  Boards of Canada                     : ! | ┃ █ ┃ | ! :
+› Radiohead                    →         ⢀⣴⣾⣿⡿⠟⠋⠉⠙⠻⢦⡀
+  Aphex Twin                            ⣰⣿⣿⣟⣵⣶⣿⣿⣷⣄⠈⢧
+  Boards of Canada                       ⠹⣿⣿⣿⡿⣟⣿⡿⠋⢀⡼
                                        1:23 ████────── 4:12
 ↑↓ move   → open   q quit
 ```
@@ -70,7 +70,7 @@ python run.py /path/to/music     # scans a specific directory
 - **Browser** (`widgets.py`): a pure-text `Browser` widget renders a single-column list per level with a `›` cursor — no tree widget, no boxes. Enter drills Artists → Albums → Tracks; ← goes back up. Picking a track posts a message to the app.
 - **Modes** (`app.py`): the browser and player are two full-screen views toggled by `display`; only the active one is shown. Choosing a track hides the browser and shows the player; `b` returns.
 - **Playback** (`audio.py`): `pygame.mixer.music` streams the file from disk.
-- **Visualizer**: on load, `pydub` decodes the file to raw samples. NumPy computes a windowed FFT every 50 ms and bins the result into 32 log-spaced frequency bands (~40 Hz to 16 kHz). During playback the widget indexes into this precomputed spectrogram by `get_pos_ms()`. It's drawn as a **radial / mirrored spectrum**: each band grows symmetrically above and below a center spine, with a density ramp of ASCII glyphs (`·:!|┃█`) — faint at the fringes, solid at the core. No color fills, so it stays fully transparent.
+- **Visualizer**: on load, `pydub` decodes the file to raw samples. NumPy computes a windowed FFT every 50 ms and bins the result into 32 log-spaced frequency bands (~40 Hz to 16 kHz). During playback the widget indexes into this precomputed spectrogram by `get_pos_ms()`. It's drawn as a **flowing harmonograph** — a Lissajous curve traced from a sum of integer-ratio harmonics `x(θ)=Σ Aᵢ sin(fᵢθ+φᵢ)`, so the figure looks chaotic but is periodic and closes into a loop. A slowly advancing phase precesses it, and the spectrum (bass/mid/treble) modulates the harmonic amplitudes so it breathes with the sound; where the curve folds over itself the passes pile into bright caustics. Rendered with **Braille characters** (2×4 dots per cell → 8× resolution) for a fine, light line. No color fills — fully transparent — and vectorized in NumPy so it holds 30 fps (~2 ms/frame).
 
 ## Supported formats
 
