@@ -128,71 +128,103 @@ class AudioEngine:
 
     # ---- analysis ----
 
+    # Seconds of audio to decode-and-analyze in the fast first pass. Decoding
+    # just the head (ffmpeg -t) takes ~150 ms regardless of track length, so the
+    # visualizer lights up in step with playback; the full track follows.
+    _HEAD_SECONDS = 4.0
+
     def _analyze(self, path: str) -> None:
         """Decode `path` and compute a log-frequency spectrogram.
 
-        Runs in a background thread. Silently fails if pydub or ffmpeg aren't
-        available; the visualizer will show a "no signal" state.
+        Runs in a background thread in two passes so the visualizer starts in
+        step with playback rather than after the whole track is analyzed:
+
+          1. Decode only the opening `_HEAD_SECONDS` and publish its spectrogram
+             immediately (~150 ms — bounded, independent of track length).
+          2. Decode the full track and publish the complete spectrogram.
+
+        Silently fails if pydub or ffmpeg aren't available; the visualizer will
+        show a "no signal" state.
         """
         try:
             # Local import so pydub/ffmpeg missing doesn't break playback.
             from pydub import AudioSegment
 
-            segment = AudioSegment.from_file(path)
-            samples = np.array(segment.get_array_of_samples(), dtype=np.float32)
-            if segment.channels == 2:
-                samples = samples.reshape((-1, 2)).mean(axis=1)
-            sample_rate = segment.frame_rate
+            # Pass 1: fast head slice so the opening frames appear right away.
+            head = AudioSegment.from_file(path, duration=self._HEAD_SECONDS)
+            self._process_segment(path, head, publish_wave=False)
+            if self.current_path != path:
+                return  # track changed while we were decoding the head
 
-            # Normalize 16-bit samples to [-1, 1].
-            samples /= float(1 << (8 * segment.sample_width - 1))
+            # Pass 2: the whole track, replacing the head-only spectrogram.
+            full = AudioSegment.from_file(path)
+            self._process_segment(path, full, publish_wave=True)
+        except Exception:
+            # Playback still works. Visualizer just shows "no signal".
+            return
 
-            hop_samples = int(sample_rate * self.HOP_MS / 1000)
-            win_samples = hop_samples * 2
-            if win_samples <= 0 or len(samples) < win_samples:
-                return
+    def _process_segment(self, path: str, segment, publish_wave: bool) -> None:
+        """Compute the spectrogram for one decoded `segment` and publish it.
 
-            window = np.hanning(win_samples).astype(np.float32)
-            freqs = np.fft.rfftfreq(win_samples, d=1.0 / sample_rate)
+        Publishes only if `path` is still the current track, so a stale pass
+        (the user skipped tracks mid-decode) never overwrites newer data.
+        """
+        samples = np.array(segment.get_array_of_samples(), dtype=np.float32)
+        if segment.channels == 2:
+            samples = samples.reshape((-1, 2)).mean(axis=1)
+        sample_rate = segment.frame_rate
 
-            # Precompute which FFT bins fall into each log-spaced band.
-            edges = np.logspace(
-                np.log10(self.FREQ_MIN),
-                np.log10(min(self.FREQ_MAX, sample_rate / 2)),
-                self.N_BARS + 1,
-            )
-            band_masks = [(freqs >= edges[i]) & (freqs < edges[i + 1]) for i in range(self.N_BARS)]
+        # Normalize 16-bit samples to [-1, 1].
+        samples /= float(1 << (8 * segment.sample_width - 1))
 
-            n_frames = (len(samples) - win_samples) // hop_samples
-            spec = np.zeros((n_frames, self.N_BARS), dtype=np.float32)
+        hop_samples = int(sample_rate * self.HOP_MS / 1000)
+        win_samples = hop_samples * 2
+        if win_samples <= 0 or len(samples) < win_samples:
+            return
 
-            for i in range(n_frames):
-                start = i * hop_samples
-                chunk = samples[start:start + win_samples] * window
-                magnitude = np.abs(np.fft.rfft(chunk))
-                for j, mask in enumerate(band_masks):
-                    if mask.any():
-                        spec[i, j] = magnitude[mask].mean()
+        window = np.hanning(win_samples).astype(np.float32)
+        freqs = np.fft.rfftfreq(win_samples, d=1.0 / sample_rate)
 
-            # Normalize per-track so bars fill the display nicely.
-            peak = spec.max()
-            if peak > 0:
-                spec = spec / peak
-                # Log-compress: emphasize quieter frequencies so the viz feels alive.
-                spec = np.log1p(spec * 20) / np.log1p(20)
+        # Precompute which FFT bins fall into each log-spaced band.
+        edges = np.logspace(
+            np.log10(self.FREQ_MIN),
+            np.log10(min(self.FREQ_MAX, sample_rate / 2)),
+            self.N_BARS + 1,
+        )
+        band_masks = [(freqs >= edges[i]) & (freqs < edges[i + 1]) for i in range(self.N_BARS)]
 
+        n_frames = (len(samples) - win_samples) // hop_samples
+        spec = np.zeros((n_frames, self.N_BARS), dtype=np.float32)
+
+        for i in range(n_frames):
+            start = i * hop_samples
+            chunk = samples[start:start + win_samples] * window
+            magnitude = np.abs(np.fft.rfft(chunk))
+            for j, mask in enumerate(band_masks):
+                if mask.any():
+                    spec[i, j] = magnitude[mask].mean()
+
+        # Normalize per-segment so bars fill the display nicely.
+        peak = spec.max()
+        if peak > 0:
+            spec = spec / peak
+            # Log-compress: emphasize quieter frequencies so the viz feels alive.
+            spec = np.log1p(spec * 20) / np.log1p(20)
+
+        if publish_wave:
             # Downsample the raw signal for the oscilloscope (~4 kHz is plenty
             # for a scope and keeps memory small).
             target_rate = 4000
             step = max(1, sample_rate // target_rate)
             wave = samples[::step]
             wave_rate = sample_rate // step
+        else:
+            wave = wave_rate = None
 
-            # Only assign at the end so partial writes never appear.
-            if self.current_path == path:
-                self.spectrogram = spec
+        # Only assign if this is still the current track, so a stale pass never
+        # clobbers newer data.
+        if self.current_path == path:
+            self.spectrogram = spec
+            if publish_wave:
                 self.waveform = wave
                 self.wave_rate = wave_rate
-        except Exception:
-            # Playback still works. Visualizer just shows "no signal".
-            return
