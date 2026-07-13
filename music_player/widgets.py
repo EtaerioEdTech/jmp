@@ -211,15 +211,13 @@ class Visualizer(Widget):
     Modes (cycle with the `v` key):
         - "scope"    : oscilloscope of the raw waveform
         - "bars"     : 32-band frequency spectrum as vertical bars
-        - "radial"   : spectrum bands radiating around a circle
         - "mirror"   : spectrum mirrored above/below a center line
     """
 
-    MODES = ("scope", "bars", "radial", "mirror")
+    MODES = ("scope", "bars", "mirror")
     MODE_LABELS = {
         "scope": "WAVEFORM",
         "bars": "SPECTRUM",
-        "radial": "RADIAL",
         "mirror": "MIRROR",
     }
 
@@ -274,8 +272,6 @@ class Visualizer(Widget):
             self._draw_scope(canvas)
         elif mode == "bars":
             self._draw_bars(canvas)
-        elif mode == "radial":
-            self._draw_radial(canvas)
         else:
             self._draw_mirror(canvas)
 
@@ -357,28 +353,6 @@ class Visualizer(Widget):
             top = int(mid - r)
             bot = int(mid + r)
             canvas.buf[max(0, top):min(canvas.gh, bot + 1), c] += 1.0
-
-    def _draw_radial(self, canvas: Canvas) -> None:
-        """Spectrum bands radiating outward from the center around a circle."""
-        bars = self._smoothed
-        if bars is None:
-            bars = np.full(24, 0.12)
-        n = len(bars)
-        cx = (canvas.gw - 1) / 2.0
-        cy = (canvas.gh - 1) / 2.0
-        base_r = min(cx, cy) * 0.32          # inner ring radius
-        span_r = min(cx, cy) * 0.62          # how far bands can reach out
-        # Slowly rotate the whole ring so it feels alive.
-        rot = self._phase * 0.6
-        # Character cells are ~2× taller than wide; squash y so the ring is round.
-        for i in range(n):
-            ang = rot + (2 * np.pi * i / n)
-            length = base_r + float(np.clip(bars[i], 0, 1)) * span_r
-            steps = max(2, int(length))
-            rr = np.linspace(base_r, length, steps)
-            xs = cx + np.cos(ang) * rr
-            ys = cy + np.sin(ang) * rr * 0.5
-            canvas.plot(xs, ys)
 
 
 class ProgressBar(Widget):

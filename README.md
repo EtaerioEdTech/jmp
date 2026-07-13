@@ -67,7 +67,7 @@ python run.py [/path/to/music]
 | Key           | Action                                        |
 |---------------|-----------------------------------------------|
 | `b` / Escape  | Back to the browser                           |
-| `v`           | Cycle visualizer (waveform → spectrum → radial → mirror) |
+| `v`           | Cycle visualizer (waveform → spectrum → mirror) |
 | Space         | Pause / resume                                |
 | `n`           | Next track                                    |
 | `p`           | Previous track                                |
@@ -81,7 +81,7 @@ python run.py [/path/to/music]
 - **Modes** (`app.py`): the browser and player are two full-screen views toggled by `display`; only the active one is shown. Choosing a track hides the browser and shows the player; `b`/Escape returns.
 - **Braille rendering** (`braille.py`): a small `Canvas` rasterizes points/lines/bars into a 2×4-dots-per-cell sub-pixel grid (8× resolution) and packs each block into one Braille glyph, fully vectorized in NumPy. The visualizer, progress bar, browser cursor and play icons all use it, so the whole UI reads as one fine, futuristic, monochrome (transparent) system.
 - **Playback** (`audio.py`): `pygame.mixer.music` streams the file from disk.
-- **Visualizer**: on load, `pydub` decodes the file to raw samples. NumPy computes a windowed FFT every 50 ms into 32 log-spaced frequency bands (~40 Hz to 16 kHz), and keeps a downsampled copy of the raw waveform. During playback the widget indexes into these by `get_pos_ms()`. Press `v` to cycle four modes — **waveform** (oscilloscope of the raw signal), **spectrum** (vertical bars), **radial** (bands radiating around a circle), and **mirror** (spectrum reflected above/below a center line). All are Braille-rendered and hold 30 fps (~1–2 ms/frame), scaling their resolution to the terminal size.
+- **Visualizer**: on load, `pydub` decodes the file to raw samples. NumPy computes a windowed FFT every 50 ms into 32 log-spaced frequency bands (~40 Hz to 16 kHz), and keeps a downsampled copy of the raw waveform. During playback the widget indexes into these by `get_pos_ms()`. Press `v` to cycle three modes — **waveform** (oscilloscope of the raw signal), **spectrum** (vertical bars), and **mirror** (spectrum reflected above/below a center line). All are Braille-rendered and hold 30 fps (~1–2 ms/frame), scaling their resolution to the terminal size.
 
 ## Supported formats
 
