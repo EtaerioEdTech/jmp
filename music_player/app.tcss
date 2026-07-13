@@ -1,0 +1,56 @@
+/* Layout: left pane for library tree, right pane for player. */
+
+Screen {
+    background: #0d0d12;
+}
+
+#left-pane {
+    width: 42%;
+    border-right: solid #444;
+    padding: 0 1;
+}
+
+#right-pane {
+    width: 58%;
+    padding: 0 1;
+}
+
+Tree {
+    height: 100%;
+    background: transparent;
+    color: #d0d0d0;
+}
+
+Tree > .tree--cursor {
+    background: #3a3aaf;
+    color: #ffffff;
+}
+
+Tree > .tree--label {
+    color: #d0d0d0;
+}
+
+#now-playing {
+    height: 4;
+    padding: 1;
+    border-bottom: solid #333;
+}
+
+#visualizer {
+    height: 1fr;
+    padding: 1 0;
+}
+
+#progress {
+    height: 3;
+    padding: 1;
+    border-top: solid #333;
+}
+
+Header {
+    background: #1a1a2e;
+}
+
+Footer {
+    background: #1a1a2e;
+}
