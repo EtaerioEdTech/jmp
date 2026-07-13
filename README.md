@@ -1,22 +1,23 @@
 # ASCII Music Player
 
-A terminal music player with a pure-text, SSH-menu-style library browser, a
-progress bar, and a real-time, high-resolution Braille visualizer that draws a
-flowing harmonograph curve reacting to the music.
+A terminal music player rendered in **Braille glyphs** for a fine, high-res,
+futuristic look — a pure-text, SSH-menu-style library browser and a real-time
+Braille visualizer with several switchable modes. Everything is monochrome
+(brightness only), so it stays fully transparent and the terminal shows through.
 
 Two full-screen modes, shown one at a time. Browse the library with the arrow
-keys; pick a track and the browser gives way to the player. Press `b` to go
-back and pick another.
+keys; pick a track and the browser gives way to the player. Press `b` (or
+Escape) to go back and pick another; press `v` to cycle the visualizer.
 
 ```
 BROWSER                            PLAYER
 
-ARTISTS                              ▶  Kid A
-                                         Radiohead  ·  Kid A
-› Radiohead                    →         ⢀⣴⣾⣿⡿⠟⠋⠉⠙⠻⢦⡀
-  Aphex Twin                            ⣰⣿⣿⣟⣵⣶⣿⣿⣷⣄⠈⢧
-  Boards of Canada                       ⠹⣿⣿⣿⡿⣟⣿⡿⠋⢀⡼
-                                       1:23 ████────── 4:12
+ARTISTS                              ⣸⣷  Kid A     ⟩ WAVEFORM
+⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿                                Radiohead · Kid A
+                                     ⣀⡠⠔⠒⠉⠉⠑⠢⢄⡀
+⣿ Radiohead                    →   ⣀⠔⠊         ⠈⠢⣀   ⡀
+  Aphex Twin                     ⠊                 ⠑⠊ ⠈
+  Boards of Canada                 1:23 ⣿⣿⣿⣿⣿⠉⠉⠉⠉⠉ 4:12
 ↑↓ move   → open   q quit
 ```
 
@@ -38,9 +39,17 @@ pip install -r requirements.txt
 
 ## Run
 
+Installed as a `ttunes` launcher on your `PATH`:
+
 ```bash
-python run.py                    # scans ~/Music
-python run.py /path/to/music     # scans a specific directory
+ttunes                    # scans ~/Music
+ttunes /path/to/music     # scans a specific directory
+```
+
+Or directly from the project directory:
+
+```bash
+python run.py [/path/to/music]
 ```
 
 ## Controls
@@ -55,22 +64,24 @@ python run.py /path/to/music     # scans a specific directory
 
 **Player:**
 
-| Key           | Action              |
-|---------------|---------------------|
-| `b` / Escape  | Back to the browser |
-| Space         | Pause / resume      |
-| `n`           | Next track          |
-| `p`           | Previous track      |
-| `+` / `-`     | Volume up / down    |
-| `q`           | Quit                |
+| Key           | Action                                        |
+|---------------|-----------------------------------------------|
+| `b` / Escape  | Back to the browser                           |
+| `v`           | Cycle visualizer (waveform → spectrum → radial → mirror) |
+| Space         | Pause / resume                                |
+| `n`           | Next track                                    |
+| `p`           | Previous track                                |
+| `+` / `-`     | Volume up / down                              |
+| `q`           | Quit                                          |
 
 ## How it works
 
 - **Library scan** (`library.py`): walks the music directory, reads ID3 / Vorbis / FLAC tags with `mutagen`, groups tracks into Artist → Album → Track.
-- **Browser** (`widgets.py`): a pure-text `Browser` widget renders a single-column list per level with a `›` cursor — no tree widget, no boxes. Enter drills Artists → Albums → Tracks; ← goes back up. Picking a track posts a message to the app.
-- **Modes** (`app.py`): the browser and player are two full-screen views toggled by `display`; only the active one is shown. Choosing a track hides the browser and shows the player; `b` returns.
+- **Browser** (`widgets.py`): a pure-text `Browser` widget renders a single-column list per level with a Braille `⣿` cursor and a Braille rule under the heading — no tree widget, no boxes. → drills Artists → Albums → Tracks; ← goes back up. Picking a track posts a message to the app.
+- **Modes** (`app.py`): the browser and player are two full-screen views toggled by `display`; only the active one is shown. Choosing a track hides the browser and shows the player; `b`/Escape returns.
+- **Braille rendering** (`braille.py`): a small `Canvas` rasterizes points/lines/bars into a 2×4-dots-per-cell sub-pixel grid (8× resolution) and packs each block into one Braille glyph, fully vectorized in NumPy. The visualizer, progress bar, browser cursor and play icons all use it, so the whole UI reads as one fine, futuristic, monochrome (transparent) system.
 - **Playback** (`audio.py`): `pygame.mixer.music` streams the file from disk.
-- **Visualizer**: on load, `pydub` decodes the file to raw samples. NumPy computes a windowed FFT every 50 ms and bins the result into 32 log-spaced frequency bands (~40 Hz to 16 kHz). During playback the widget indexes into this precomputed spectrogram by `get_pos_ms()`. It's drawn as a **flowing harmonograph** — a Lissajous curve traced from a sum of integer-ratio harmonics `x(θ)=Σ Aᵢ sin(fᵢθ+φᵢ)`, so the figure looks chaotic but is periodic and closes into a loop. A slowly advancing phase precesses it, and the spectrum (bass/mid/treble) modulates the harmonic amplitudes so it breathes with the sound; where the curve folds over itself the passes pile into bright caustics. Rendered with **Braille characters** (2×4 dots per cell → 8× resolution) for a fine, light line. No color fills — fully transparent — and vectorized in NumPy so it holds 30 fps (~2 ms/frame).
+- **Visualizer**: on load, `pydub` decodes the file to raw samples. NumPy computes a windowed FFT every 50 ms into 32 log-spaced frequency bands (~40 Hz to 16 kHz), and keeps a downsampled copy of the raw waveform. During playback the widget indexes into these by `get_pos_ms()`. Press `v` to cycle four modes — **waveform** (oscilloscope of the raw signal), **spectrum** (vertical bars), **radial** (bands radiating around a circle), and **mirror** (spectrum reflected above/below a center line). All are Braille-rendered and hold 30 fps (~1–2 ms/frame), scaling their resolution to the terminal size.
 
 ## Supported formats
 
@@ -79,7 +90,7 @@ MP3, OGG, FLAC, WAV, M4A, Opus. Visualizer works for any format ffmpeg can decod
 ## Project layout
 
 ```
-ascii-music-player/
+terminaltunes/
 ├── run.py                    # entry point
 ├── requirements.txt
 ├── README.md
@@ -87,9 +98,10 @@ ascii-music-player/
     ├── __init__.py
     ├── app.py                # Textual app
     ├── app.tcss              # styling
-    ├── audio.py              # pygame + FFT
+    ├── audio.py              # pygame + FFT + waveform
+    ├── braille.py            # Braille sub-pixel canvas
     ├── library.py            # directory scan + tags
-    └── widgets.py            # Visualizer, ProgressBar, NowPlaying
+    └── widgets.py            # Browser, Visualizer, ProgressBar, NowPlaying
 ```
 
 ## Notes

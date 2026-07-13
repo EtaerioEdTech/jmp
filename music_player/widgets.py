@@ -1,4 +1,9 @@
-"""Custom Textual widgets: Browser, Visualizer, ProgressBar, NowPlaying."""
+"""Custom Textual widgets: Browser, Visualizer, ProgressBar, NowPlaying.
+
+The whole UI is rendered in one visual language: Braille glyphs for the
+visualizer, the progress bar, the browser cursor/rule, and the play icons, all
+monochrome (brightness only) so it stays transparent and futuristic.
+"""
 
 from __future__ import annotations
 
@@ -8,6 +13,7 @@ from textual import events
 from textual.message import Message
 from textual.widget import Widget
 
+from .braille import Canvas, line_glyphs
 from .library import Artist, Track
 
 
@@ -168,19 +174,24 @@ class Browser(Widget, can_focus=True):
     def render(self) -> Text:
         width = self.size.width
         out = Text()
-        out.append(self._heading() + "\n", style="bold cyan")
+        # Heading + a Braille rule under it, in the same visual language as the
+        # visualizer and progress bar.
+        heading = self._heading()
+        out.append(heading + "\n", style="bold")
+        rule_w = max(4, min(width, len(heading) + 6))
+        out.append(chr(0x28FF) * rule_w + "\n", style="dim")
         out.append("\n")
 
         if self._empty:
             out.append("(no audio files found)\n", style="dim italic")
-            out.append("\nPass a music directory: terminaltunes /path/to/music\n", style="dim")
+            out.append("\nPass a music directory: ttunes /path/to/music\n", style="dim")
             return out
 
         for i, row in enumerate(self._rows):
             selected = i == self._cursor
-            # Selection is marked by the cursor + bold text only — no background
+            # Selection is marked by a Braille cursor + bold text — no background
             # fill, so the terminal shows through everywhere.
-            marker = "› " if selected else "  "
+            marker = "⣿ " if selected else "  "
             style = "bold" if selected else "dim"
             out.append(f"{marker}{row}\n", style=style)
 
@@ -190,119 +201,66 @@ class Browser(Widget, can_focus=True):
 
 
 class Visualizer(Widget):
-    """A flowing harmonograph curve — a Lissajous figure driven by the music.
+    """A Braille-rendered audio visualizer with several switchable modes.
 
-    Instead of bars, a single continuous parametric curve is traced across the
-    field:
+    All modes rasterize into a high-resolution Braille sub-pixel canvas (2×4
+    dots per character cell → 8× resolution), so everything reads as a fine,
+    light, futuristic line rather than chunky blocks. Fully transparent —
+    brightness is carried by dim/normal/bold styling, never color fills.
 
-        x(θ) = Σ Aᵢ · sin(fᵢ·θ + φᵢ) · e^(−dᵢθ)
-        y(θ) = Σ Bᵢ · sin(gᵢ·θ + ψᵢ) · e^(−dᵢθ)
-
-    This is a *harmonograph* (the curve two coupled pendulums draw). Because the
-    component frequencies fᵢ, gᵢ are small integer ratios, the figure is
-    periodic — it looks chaotic and hand-drawn but is fully deterministic and
-    closes into a loop. A slowly advancing global phase rotates the whole
-    figure so it seems random yet never repeats moment-to-moment, and the
-    live FFT spectrum modulates the amplitudes and phases so the curve breathes
-    with the sound. Where the curve folds over itself the passes pile up into
-    bright caustics — the geometric beauty is intrinsic to the math.
-
-    Rendering uses Braille characters (U+2800…): every cell packs a 2×4 dot
-    grid, giving 8× the resolution of one glyph per cell, so the curve reads as
-    a fine, light line rather than chunky blocks. No color fills — fully
-    transparent — with brightness carried by dim/normal styling on the dots.
+    Modes (cycle with the `v` key):
+        - "scope"    : oscilloscope of the raw waveform
+        - "bars"     : 32-band frequency spectrum as vertical bars
+        - "radial"   : spectrum bands radiating around a circle
+        - "mirror"   : spectrum mirrored above/below a center line
     """
 
-    DECAY = 0.82  # spectrum smoothing between frames: fast attack, slow release
+    MODES = ("scope", "bars", "radial", "mirror")
+    MODE_LABELS = {
+        "scope": "WAVEFORM",
+        "bars": "SPECTRUM",
+        "radial": "RADIAL",
+        "mirror": "MIRROR",
+    }
 
-    # Braille cell geometry: 2 dot-columns × 4 dot-rows per character.
-    DOT_W = 2
-    DOT_H = 4
-    # Bit weight of each (dx, dy) dot within a Braille cell (Unicode layout).
-    _DOT_BITS = ((0x01, 0x02, 0x04, 0x40), (0x08, 0x10, 0x20, 0x80))
-
-    # Integer-ratio harmonics for the two axes. Small coprime ratios give
-    # closed rosette figures; the slowly advancing phase makes them precess.
-    FX = (1.0, 2.0, 3.0)      # x-axis harmonic multipliers
-    FY = (1.0, 2.0, 3.0)      # y-axis harmonic multipliers
-
-    THETA_SPAN = 24 * np.pi   # how far along the curve we trace (12 lobes)
-    N_SAMPLES = 2600          # points sampled along the curve per frame
+    DECAY = 0.80  # spectrum smoothing between frames: fast attack, slow release
 
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
-        self._smoothed: np.ndarray | None = None
-        self._active = False
-        self._phase = 0.0  # global phase, advances every frame → animation
+        self._mode_idx = 0
+        self._smoothed: np.ndarray | None = None   # smoothed spectrum bars
+        self._wave: np.ndarray | None = None        # latest raw waveform slice
+        self._phase = 0.0
 
-    def update_bars(self, bars: np.ndarray | None) -> None:
-        """Push a new spectrum frame in, advance the animation, and refresh."""
-        # The phase always advances so the figure keeps flowing between the
-        # spectrogram's coarser (20 fps) updates.
+    @property
+    def mode(self) -> str:
+        return self.MODES[self._mode_idx]
+
+    @property
+    def mode_label(self) -> str:
+        return self.MODE_LABELS[self.mode]
+
+    def cycle_mode(self) -> str:
+        """Advance to the next visualization and return its label."""
+        self._mode_idx = (self._mode_idx + 1) % len(self.MODES)
+        self.refresh()
+        return self.mode_label
+
+    def update_frame(self, bars: np.ndarray | None, wave: np.ndarray | None) -> None:
+        """Feed the current spectrum + waveform, advance animation, refresh."""
         self._phase += 0.05
-
         if bars is None:
-            self._active = False
             self._smoothed = None
         else:
-            self._active = True
-            if self._smoothed is None or len(self._smoothed) != len(bars):
-                self._smoothed = bars.astype(float).copy()
+            b = np.asarray(bars, dtype=float)
+            if self._smoothed is None or len(self._smoothed) != len(b):
+                self._smoothed = b.copy()
             else:
-                self._smoothed = np.maximum(bars, self._smoothed * self.DECAY)
+                self._smoothed = np.maximum(b, self._smoothed * self.DECAY)
+        self._wave = None if wave is None else np.asarray(wave, dtype=float)
         self.refresh()
 
-    # ---- spectrum → curve parameters ----
-
-    def _bands(self) -> tuple[float, float, float]:
-        """Collapse the spectrum into (bass, mid, treble) energies in ~0..1."""
-        if self._smoothed is None or len(self._smoothed) == 0:
-            return 0.0, 0.0, 0.0
-        s = self._smoothed
-        n = len(s)
-        bass = float(s[: n // 3].mean())
-        mid = float(s[n // 3 : 2 * n // 3].mean())
-        treble = float(s[2 * n // 3 :].mean())
-        return bass, mid, treble
-
-    def _curve(self, width: int, height: int) -> tuple[np.ndarray, np.ndarray]:
-        """Compute the harmonograph curve as integer dot coordinates (dx, dy)
-        on the high-resolution Braille sub-grid."""
-        bass, mid, treble = self._bands() if self._active else (0.28, 0.16, 0.09)
-
-        theta = np.linspace(0.0, self.THETA_SPAN, self.N_SAMPLES)
-        p = self._phase
-
-        # Amplitudes and phases per harmonic, modulated by the spectrum. Bass
-        # swells the fundamental lobe; treble adds fine high-harmonic filigree.
-        ax = np.array([0.75 + 0.7 * bass, 0.45 + 0.6 * mid, 0.22 + 0.7 * treble])
-        ay = np.array([0.75 + 0.7 * mid, 0.45 + 0.6 * treble, 0.22 + 0.7 * bass])
-        # Golden-angle offsets keep harmonics from lining up; p precesses all.
-        phix = p * np.array([1.0, 2.0, 3.0]) + np.array([0.0, 2.399963, 4.799926])
-        phiy = p * np.array([1.5, 2.5, 3.5]) + np.array([1.570796, 3.970759, 6.370722])
-        # Gentle damping along the trace gives the inward-spiralling envelope.
-        damp = np.exp(-0.018 * theta)
-
-        x = (ax[0] * np.sin(self.FX[0] * theta + phix[0])
-             + ax[1] * np.sin(self.FX[1] * theta + phix[1])
-             + ax[2] * np.sin(self.FX[2] * theta + phix[2])) * damp
-        y = (ay[0] * np.sin(self.FY[0] * theta + phiy[0])
-             + ay[1] * np.sin(self.FY[1] * theta + phiy[1])
-             + ay[2] * np.sin(self.FY[2] * theta + phiy[2])) * damp
-
-        # High-res sub-pixel grid dimensions.
-        gw = width * self.DOT_W
-        gh = height * self.DOT_H
-
-        # Fit the curve's bounding box into the sub-grid, centered, aspect kept.
-        xmid = (x.min() + x.max()) / 2.0
-        ymid = (y.min() + y.max()) / 2.0
-        xspan = max(x.max() - x.min(), 1e-6)
-        yspan = max(y.max() - y.min(), 1e-6)
-        scale = min((gw - 1) / xspan, (gh - 1) / yspan) * 0.94
-        dx = ((gw - 1) / 2.0 + (x - xmid) * scale)
-        dy = ((gh - 1) / 2.0 + (y - ymid) * scale)
-        return dx, dy
+    # ---- rendering ----
 
     def render(self) -> Text:
         width = self.size.width
@@ -310,63 +268,117 @@ class Visualizer(Widget):
         if width <= 0 or height <= 0:
             return Text("")
 
-        dx, dy = self._curve(width, height)
-        gw = width * self.DOT_W
-        gh = height * self.DOT_H
+        canvas = Canvas(width, height)
+        mode = self.mode
+        if mode == "scope":
+            self._draw_scope(canvas)
+        elif mode == "bars":
+            self._draw_bars(canvas)
+        elif mode == "radial":
+            self._draw_radial(canvas)
+        else:
+            self._draw_mirror(canvas)
 
-        # Draw the curve as a *connected* line: supersample along it so there
-        # are no gaps even at high resolution (a light, continuous stroke rather
-        # than scattered dots). A fixed oversample keeps this fully vectorized —
-        # no per-segment Python loop — so it stays fast enough for 30 fps.
-        OVER = 4
-        # Linear interpolation between each pair of samples at OVER sub-steps.
-        t = (np.arange(OVER) / OVER)[None, :]  # (1, OVER)
-        px = (dx[:-1, None] + np.diff(dx)[:, None] * t).ravel().astype(int)
-        py = (dy[:-1, None] + np.diff(dy)[:, None] * t).ravel().astype(int)
-        np.clip(px, 0, gw - 1, out=px)
-        np.clip(py, 0, gh - 1, out=py)
+        return self._emit(canvas)
 
-        # Accumulate hit density on the sub-grid: folds/caustics pile up bright.
-        dots = np.zeros((gh, gw), dtype=np.float32)
-        np.add.at(dots, (py, px), 1.0)
-        hit = dots > 0
-
-        # Vectorized Braille packing. Reshape the (gh, gw) dot grid into
-        # (height, DOT_H, width, DOT_W) blocks, weight each dot by its Braille
-        # bit, and OR the bits together to get one code per cell — no per-cell
-        # Python loop, so this stays fast enough for 30 fps.
-        bit_weights = np.array(
-            [[self._DOT_BITS[ddx][ddy] for ddx in range(self.DOT_W)]
-             for ddy in range(self.DOT_H)],
-            dtype=np.int32,
-        )  # shape (DOT_H, DOT_W)
-        blocks = hit.reshape(height, self.DOT_H, width, self.DOT_W)
-        codes = (blocks * bit_weights[None, :, None, :]).sum(axis=(1, 3)).astype(np.int32)
-        # Per-cell density total → brightness tier (0 dim, 1 default, 2 bold).
-        totals = dots.reshape(height, self.DOT_H, width, self.DOT_W).sum(axis=(1, 3))
-        tier = np.where(totals >= 3, 2, np.where(totals >= 2, 1, 0))
-
+    def _emit(self, canvas: Canvas) -> Text:
+        """Turn a Canvas into styled Braille Text (transparent, dim→bold)."""
+        codes = canvas.codes()
+        density = canvas.density()
         styles = ("dim", "default", "bold")
-        lines: list[Text] = []
-        for cy in range(height):
-            line = Text()
-            row_codes = codes[cy]
-            row_tier = tier[cy]
-            # Group consecutive cells that share a style into single spans.
-            for cx in range(width):
-                code = int(row_codes[cx])
-                if code == 0:
-                    line.append(" ")
-                else:
-                    line.append(chr(0x2800 + code), style=styles[int(row_tier[cx])])
-            lines.append(line)
-
         result = Text()
-        for i, line in enumerate(lines):
-            if i > 0:
+        for r in range(canvas.height):
+            if r > 0:
                 result.append("\n")
-            result.append_text(line)
+            row_codes = codes[r]
+            row_den = density[r]
+            for c in range(canvas.width):
+                code = int(row_codes[c])
+                if code == 0:
+                    result.append(" ")
+                else:
+                    d = row_den[c]
+                    tier = 2 if d >= 5 else (1 if d >= 3 else 0)
+                    result.append(chr(0x2800 + code), style=styles[tier])
         return result
+
+    # ---- individual modes ----
+
+    def _draw_scope(self, canvas: Canvas) -> None:
+        """Oscilloscope: the raw waveform as a wiggling line down the middle."""
+        wave = self._wave
+        if wave is None or len(wave) < 2:
+            self._draw_flatline(canvas)
+            return
+        # Resample the waveform to one point per dot-column.
+        n = canvas.gw
+        idx = np.linspace(0, len(wave) - 1, n).astype(int)
+        w = wave[idx]
+        # Map amplitude [-1,1] to dot rows, centered, with a little headroom.
+        mid = (canvas.gh - 1) / 2.0
+        ys = mid - w * mid * 0.9
+        xs = np.arange(n)
+        canvas.line(xs, ys, oversample=2)
+
+    def _draw_flatline(self, canvas: Canvas) -> None:
+        """A calm centered line when there's no signal yet."""
+        mid = (canvas.gh - 1) / 2.0
+        xs = np.arange(canvas.gw)
+        ys = np.full(canvas.gw, mid)
+        canvas.plot(xs[::3], ys[::3])  # dotted, faint
+
+    def _draw_bars(self, canvas: Canvas) -> None:
+        """32-band spectrum as vertical Braille bars across the width."""
+        bars = self._smoothed
+        if bars is None:
+            self._draw_flatline(canvas)
+            return
+        n_cols = canvas.gw
+        idx = np.linspace(0, len(bars) - 1, n_cols).astype(int)
+        vals = np.clip(bars[idx], 0, 1)
+        heights = (vals * canvas.gh).astype(int)
+        for c in range(n_cols):
+            canvas.vbar(c, heights[c])
+
+    def _draw_mirror(self, canvas: Canvas) -> None:
+        """Spectrum mirrored above and below the center line."""
+        bars = self._smoothed
+        if bars is None:
+            self._draw_flatline(canvas)
+            return
+        n_cols = canvas.gw
+        idx = np.linspace(0, len(bars) - 1, n_cols).astype(int)
+        vals = np.clip(bars[idx], 0, 1)
+        half = canvas.gh / 2.0
+        mid = (canvas.gh - 1) / 2.0
+        reach = (vals * half * 0.95)
+        for c in range(n_cols):
+            r = reach[c]
+            top = int(mid - r)
+            bot = int(mid + r)
+            canvas.buf[max(0, top):min(canvas.gh, bot + 1), c] += 1.0
+
+    def _draw_radial(self, canvas: Canvas) -> None:
+        """Spectrum bands radiating outward from the center around a circle."""
+        bars = self._smoothed
+        if bars is None:
+            bars = np.full(24, 0.12)
+        n = len(bars)
+        cx = (canvas.gw - 1) / 2.0
+        cy = (canvas.gh - 1) / 2.0
+        base_r = min(cx, cy) * 0.32          # inner ring radius
+        span_r = min(cx, cy) * 0.62          # how far bands can reach out
+        # Slowly rotate the whole ring so it feels alive.
+        rot = self._phase * 0.6
+        # Character cells are ~2× taller than wide; squash y so the ring is round.
+        for i in range(n):
+            ang = rot + (2 * np.pi * i / n)
+            length = base_r + float(np.clip(bars[i], 0, 1)) * span_r
+            steps = max(2, int(length))
+            rr = np.linspace(base_r, length, steps)
+            xs = cx + np.cos(ang) * rr
+            ys = cy + np.sin(ang) * rr * 0.5
+            canvas.plot(xs, ys)
 
 
 class ProgressBar(Widget):
@@ -399,17 +411,25 @@ class ProgressBar(Widget):
         else:
             fraction = 0.0
 
+        # Braille bar: solid ⣿ for elapsed, faint ⠉ track for the remainder.
         filled = int(bar_width * fraction)
         bar = Text()
-        bar.append(f"{pos_str} ", style="bold cyan")
-        bar.append("█" * filled, style="cyan")
-        bar.append("─" * (bar_width - filled), style="dim")
-        bar.append(f" {total_str}", style="bold cyan")
+        bar.append(f"{pos_str} ", style="bold")
+        bar.append(line_glyphs(bar_width, fraction)[:filled], style="default")
+        bar.append(line_glyphs(bar_width, 0.0)[filled:], style="dim")
+        bar.append(f" {total_str}", style="bold")
         return bar
 
 
 class NowPlaying(Widget):
-    """Shows current track title, album, and artist."""
+    """Shows current track title, album, artist, and the active viz mode.
+
+    Monochrome — brightness only (bold / normal / dim) so it stays transparent
+    and on-theme with the Braille rendering. Play/pause icons are Braille dots.
+    """
+
+    # Braille "glyph" status icons keep the whole UI in one visual language.
+    _ICON = {"playing": "⣸⣷", "paused": "⣇⣸", "stopped": "⣿⣿"}
 
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
@@ -417,6 +437,7 @@ class NowPlaying(Widget):
         self._album = ""
         self._artist = ""
         self._status = "stopped"
+        self._viz_label = ""
 
     def set_track(self, title: str, album: str, artist: str) -> None:
         self._title = title
@@ -429,19 +450,25 @@ class NowPlaying(Widget):
         self._status = status
         self.refresh()
 
+    def set_viz_label(self, label: str) -> None:
+        self._viz_label = label
+        self.refresh()
+
     def render(self) -> Text:
         if not self._title:
-            return Text("♪  no track loaded", style="dim italic")
+            return Text("⠶  no track loaded", style="dim italic")
 
-        icon = {"playing": "▶", "paused": "⏸", "stopped": "■"}.get(self._status, "♪")
+        icon = self._ICON.get(self._status, "⣿⣿")
         text = Text()
-        text.append(f"{icon}  ", style="bold magenta")
-        text.append(self._title, style="bold white")
+        text.append(f"{icon}  ", style="bold")
+        text.append(self._title, style="bold")
+        if self._viz_label:
+            text.append(f"     ⟩ {self._viz_label}", style="dim")
         text.append("\n")
-        text.append(f"    {self._artist}", style="cyan")
+        text.append(f"      {self._artist}", style="default")
         if self._album:
-            text.append(f"  ·  ", style="dim")
-            text.append(self._album, style="italic")
+            text.append("  ·  ", style="dim")
+            text.append(self._album, style="dim italic")
         return text
 
 

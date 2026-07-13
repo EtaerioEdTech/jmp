@@ -30,6 +30,8 @@ class AudioEngine:
         pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=1024)
         self.current_path: str | None = None
         self.spectrogram: np.ndarray | None = None  # shape (frames, N_BARS)
+        self.waveform: np.ndarray | None = None      # downsampled mono samples, [-1, 1]
+        self.wave_rate: int = 0                       # samples/sec of `waveform`
         self._analysis_thread: threading.Thread | None = None
         self._paused = False
         self._pause_offset_ms = 0  # ms already played when paused
@@ -44,6 +46,8 @@ class AudioEngine:
         pygame.mixer.music.play()
         self.current_path = path
         self.spectrogram = None
+        self.waveform = None
+        self.wave_rate = 0
         self._paused = False
         self._pause_offset_ms = 0
         # Analyze the audio in a background thread so the UI stays responsive.
@@ -67,6 +71,8 @@ class AudioEngine:
         pygame.mixer.music.stop()
         self.current_path = None
         self.spectrogram = None
+        self.waveform = None
+        self.wave_rate = 0
         self._paused = False
 
     def is_playing(self) -> bool:
@@ -104,6 +110,21 @@ class AudioEngine:
         if 0 <= frame_idx < len(self.spectrogram):
             return self.spectrogram[frame_idx]
         return None
+
+    def get_current_wave(self, n: int = 512) -> np.ndarray | None:
+        """Return ~`n` raw samples around the current playback position, in
+        [-1, 1], for the oscilloscope. None if the waveform isn't ready."""
+        if self.waveform is None or self.wave_rate <= 0:
+            return None
+        center = int(self.get_pos_ms() / 1000.0 * self.wave_rate)
+        half = n // 2
+        start = max(0, center - half)
+        end = start + n
+        if end > len(self.waveform):
+            end = len(self.waveform)
+            start = max(0, end - n)
+        window = self.waveform[start:end]
+        return window if len(window) > 0 else None
 
     # ---- analysis ----
 
@@ -160,9 +181,18 @@ class AudioEngine:
                 # Log-compress: emphasize quieter frequencies so the viz feels alive.
                 spec = np.log1p(spec * 20) / np.log1p(20)
 
+            # Downsample the raw signal for the oscilloscope (~4 kHz is plenty
+            # for a scope and keeps memory small).
+            target_rate = 4000
+            step = max(1, sample_rate // target_rate)
+            wave = samples[::step]
+            wave_rate = sample_rate // step
+
             # Only assign at the end so partial writes never appear.
             if self.current_path == path:
                 self.spectrogram = spec
+                self.waveform = wave
+                self.wave_rate = wave_rate
         except Exception:
             # Playback still works. Visualizer just shows "no signal".
             return

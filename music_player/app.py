@@ -41,6 +41,7 @@ class MusicPlayerApp(App):
         ("b", "browse", "Browse"),
         ("escape", "browse", "Browse"),
         ("space", "toggle_play", "Play / Pause"),
+        ("v", "cycle_viz", "Visual"),
         ("n", "next_track", "Next"),
         ("p", "prev_track", "Prev"),
         ("plus", "vol_up", "Vol +"),
@@ -114,6 +115,7 @@ class MusicPlayerApp(App):
         now_playing = self.query_one("#now-playing", NowPlaying)
         now_playing.set_track(track.title, self.current_album, self.current_artist)
         now_playing.set_status("playing")
+        now_playing.set_viz_label(self.query_one("#visualizer", Visualizer).mode_label)
 
     # ---- tick loop ----
 
@@ -123,7 +125,7 @@ class MusicPlayerApp(App):
             return
 
         viz = self.query_one("#visualizer", Visualizer)
-        viz.update_bars(self.engine.get_current_bars())
+        viz.update_frame(self.engine.get_current_bars(), self.engine.get_current_wave())
 
         if self.current_track:
             progress = self.query_one("#progress", ProgressBar)
@@ -134,6 +136,11 @@ class MusicPlayerApp(App):
             self.action_next_track()
 
     # ---- actions bound to keys ----
+
+    def action_cycle_viz(self) -> None:
+        viz = self.query_one("#visualizer", Visualizer)
+        label = viz.cycle_mode()
+        self.query_one("#now-playing", NowPlaying).set_viz_label(label)
 
     def action_toggle_play(self) -> None:
         if self.current_track is None:
