@@ -13,7 +13,7 @@ from textual import events
 from textual.message import Message
 from textual.widget import Widget
 
-from .braille import Canvas, line_glyphs
+from .braille import Canvas
 from .library import Artist, Track
 
 
@@ -212,14 +212,24 @@ class Visualizer(Widget):
         - "scope"    : oscilloscope of the raw waveform
         - "bars"     : 32-band frequency spectrum as vertical bars
         - "mirror"   : spectrum mirrored above/below a center line
+        - "inverted" : spectrum as negative space — field filled, bars carved out
+        - "envelope" : smooth amplitude-envelope hills (never noisy, even loud)
+        - "waterfall": scrolling time × frequency spectrogram history
+        - "rings"    : concentric rings that pulse outward with energy
     """
 
-    MODES = ("scope", "bars", "mirror")
+    MODES = ("scope", "bars", "mirror", "inverted", "envelope", "waterfall", "rings")
     MODE_LABELS = {
         "scope": "WAVEFORM",
         "bars": "SPECTRUM",
         "mirror": "MIRROR",
+        "inverted": "INVERTED",
+        "envelope": "ENVELOPE",
+        "waterfall": "WATERFALL",
+        "rings": "RINGS",
     }
+
+    HISTORY = 96  # frames of spectrum/energy history kept for scrolling modes
 
     DECAY = 0.80  # spectrum smoothing between frames: fast attack, slow release
 
@@ -229,6 +239,9 @@ class Visualizer(Widget):
         self._smoothed: np.ndarray | None = None   # smoothed spectrum bars
         self._wave: np.ndarray | None = None        # latest raw waveform slice
         self._phase = 0.0
+        # Rolling history for the scrolling / pulsing modes.
+        self._spec_hist: list[np.ndarray] = []      # recent spectrum frames
+        self._energy_hist: list[float] = []         # recent overall loudness
 
     @property
     def mode(self) -> str:
@@ -256,6 +269,14 @@ class Visualizer(Widget):
             else:
                 self._smoothed = np.maximum(b, self._smoothed * self.DECAY)
         self._wave = None if wave is None else np.asarray(wave, dtype=float)
+
+        # Push a frame of history for the scrolling / pulsing modes.
+        if self._smoothed is not None:
+            self._spec_hist.append(self._smoothed.copy())
+            self._energy_hist.append(float(self._smoothed.mean()))
+            if len(self._spec_hist) > self.HISTORY:
+                self._spec_hist.pop(0)
+                self._energy_hist.pop(0)
         self.refresh()
 
     # ---- rendering ----
@@ -267,13 +288,16 @@ class Visualizer(Widget):
             return Text("")
 
         canvas = Canvas(width, height)
-        mode = self.mode
-        if mode == "scope":
-            self._draw_scope(canvas)
-        elif mode == "bars":
-            self._draw_bars(canvas)
-        else:
-            self._draw_mirror(canvas)
+        draw = {
+            "scope": self._draw_scope,
+            "bars": self._draw_bars,
+            "mirror": self._draw_mirror,
+            "inverted": self._draw_inverted,
+            "envelope": self._draw_envelope,
+            "waterfall": self._draw_waterfall,
+            "rings": self._draw_rings,
+        }[self.mode]
+        draw(canvas)
 
         return self._emit(canvas)
 
@@ -354,6 +378,92 @@ class Visualizer(Widget):
             bot = int(mid + r)
             canvas.buf[max(0, top):min(canvas.gh, bot + 1), c] += 1.0
 
+    def _draw_inverted(self, canvas: Canvas) -> None:
+        """Negative-space spectrum: fill the whole field, carve the bars out as
+        gaps so the spectrum reads as a silhouette."""
+        canvas.buf[:] = 1.0  # fill everything
+        bars = self._smoothed
+        if bars is None:
+            return
+        n_cols = canvas.gw
+        idx = np.linspace(0, len(bars) - 1, n_cols).astype(int)
+        vals = np.clip(bars[idx], 0, 1)
+        heights = (vals * canvas.gh).astype(int)
+        for c in range(n_cols):
+            h = heights[c]
+            if h > 0:
+                # Clear (carve out) the bar column from the bottom up.
+                canvas.buf[canvas.gh - h:canvas.gh, c] = 0.0
+
+    def _draw_envelope(self, canvas: Canvas) -> None:
+        """Amplitude-envelope waveform: smooth loudness hills, not raw samples,
+        so it never dissolves into noise at high volume."""
+        wave = self._wave
+        if wave is None or len(wave) < 2:
+            self._draw_flatline(canvas)
+            return
+        n = canvas.gw
+        # Split the window into `n` chunks; each chunk's envelope is its peak
+        # absolute amplitude. This is a smooth outline, not the raw wiggle.
+        edges = np.linspace(0, len(wave), n + 1).astype(int)
+        env = np.array([
+            np.abs(wave[edges[i]:edges[i + 1]]).max() if edges[i + 1] > edges[i] else 0.0
+            for i in range(n)
+        ])
+        # Light smoothing so the hills flow.
+        k = np.array([0.25, 0.5, 0.25])
+        env = np.convolve(env, k, mode="same")
+        env = np.clip(env, 0, 1)
+        mid = (canvas.gh - 1) / 2.0
+        xs = np.arange(n)
+        top = mid - env * mid * 0.95
+        bot = mid + env * mid * 0.95
+        # Fill the mirrored envelope so it reads as a solid flowing shape.
+        for c in range(n):
+            canvas.buf[int(top[c]):int(bot[c]) + 1, c] += 1.0
+
+    def _draw_waterfall(self, canvas: Canvas) -> None:
+        """Scrolling spectrogram: newest frame on the right, scrolling left;
+        frequency runs bottom (low) to top (high), density = energy."""
+        hist = self._spec_hist
+        if not hist:
+            self._draw_flatline(canvas)
+            return
+        gw, gh = canvas.gw, canvas.gh
+        # Take the most recent `gw` frames (one per dot-column), oldest → left.
+        frames = hist[-gw:]
+        start_col = gw - len(frames)
+        for i, frame in enumerate(frames):
+            col = start_col + i
+            # Resample this frame's bands up the column (low freq at bottom).
+            idx = np.linspace(0, len(frame) - 1, gh).astype(int)
+            colvals = np.clip(frame[idx], 0, 1)
+            # Light a dot where energy clears a small threshold; brighter dots
+            # (higher buf value) read bolder via the density tiers in _emit.
+            lit = colvals > 0.12
+            canvas.buf[gh - 1 - np.arange(gh)[lit], col] = 1.0 + colvals[lit] * 5.0
+
+    def _draw_rings(self, canvas: Canvas) -> None:
+        """Concentric rings rippling outward; recent loudness sets their radii
+        so beats send pulses out from the center."""
+        cx = (canvas.gw - 1) / 2.0
+        cy = (canvas.gh - 1) / 2.0
+        max_r = min(cx, cy)
+        energy = self._energy_hist[-24:] if self._energy_hist else [0.1]
+        # A few rings, each expanding with the phase and modulated by a recent
+        # energy sample, wrapping around so they ripple outward continuously.
+        n_rings = 5
+        theta = np.linspace(0, 2 * np.pi, 240)
+        ct, st = np.cos(theta), np.sin(theta) * 0.5  # squash y → round rings
+        for k in range(n_rings):
+            # Expanding radius that wraps 0→1; offset per ring so they trail.
+            frac = ((self._phase * 0.15) + k / n_rings) % 1.0
+            e = energy[-1 - (k % len(energy))]
+            r = frac * max_r * (0.7 + 0.6 * float(np.clip(e, 0, 1)))
+            if r < 1:
+                continue
+            canvas.plot(cx + ct * r, cy + st * r)
+
 
 class ProgressBar(Widget):
     """A one-line progress bar with elapsed / total time labels."""
@@ -368,6 +478,13 @@ class ProgressBar(Widget):
         self._total = total_seconds
         self.refresh()
 
+    # A Braille cell is 4 dots tall. The elapsed portion is the slim, centered
+    # middle-two-dot line; the remaining track is the full-height block. As the
+    # song plays the tall block collapses to the centered line behind the
+    # playhead — the bar "fills in" from the top and bottom toward the middle.
+    _DONE = chr(0x2836)   # ⠶ middle two dot-rows — elapsed (slim centered line)
+    _TRACK = chr(0x28FF)  # ⣿ full cell — remaining track
+
     def render(self) -> Text:
         width = self.size.width
         if width <= 0:
@@ -375,24 +492,19 @@ class ProgressBar(Widget):
 
         pos_str = _format_time(self._pos)
         total_str = _format_time(self._total)
-        labels = f"{pos_str}  " + "  " + f"  {total_str}"
         bar_width = width - len(pos_str) - len(total_str) - 4
         if bar_width < 4:
             return Text(f"{pos_str} / {total_str}")
 
-        if self._total > 0:
-            fraction = max(0.0, min(1.0, self._pos / self._total))
-        else:
-            fraction = 0.0
-
-        # Braille bar: solid ⣿ for elapsed, faint ⠉ track for the remainder.
+        fraction = max(0.0, min(1.0, self._pos / self._total)) if self._total > 0 else 0.0
         filled = int(bar_width * fraction)
-        bar = Text()
-        bar.append(f"{pos_str} ", style="bold")
-        bar.append(line_glyphs(bar_width, fraction)[:filled], style="default")
-        bar.append(line_glyphs(bar_width, 0.0)[filled:], style="dim")
-        bar.append(f" {total_str}", style="bold")
-        return bar
+
+        out = Text()
+        out.append(f"{pos_str} ", style="bold")
+        out.append(self._DONE * filled, style="default")
+        out.append(self._TRACK * (bar_width - filled), style="dim")
+        out.append(f" {total_str}", style="bold")
+        return out
 
 
 class NowPlaying(Widget):

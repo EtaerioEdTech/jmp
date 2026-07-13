@@ -82,15 +82,3 @@ class Canvas:
         """Return an (height, width) float array of per-cell hit totals, for
         deciding brightness (how many strokes crossed each cell)."""
         return self.buf.reshape(self.height, DOT_H, self.width, DOT_W).sum(axis=(1, 3))
-
-
-def line_glyphs(width: int, filled: float) -> str:
-    """A horizontal Braille bar `width` chars wide, `filled` in 0..1 of it
-    solid (all 8 dots) and the remainder faint (top+bottom dots only). Handy
-    for progress bars and rules."""
-    if width <= 0:
-        return ""
-    solid = chr(0x28FF)  # all 8 dots
-    faint = chr(0x2809)  # ⠉ two top-ish dots — a light track
-    n_full = int(round(max(0.0, min(1.0, filled)) * width))
-    return solid * n_full + faint * (width - n_full)

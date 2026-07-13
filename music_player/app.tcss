@@ -32,7 +32,7 @@ Screen {
 }
 
 #progress {
-    height: 3;
+    height: 1;
 }
 
 /* Footer reads as a hint line, not a status bar. */
