@@ -23,8 +23,11 @@ Screen {
 }
 
 #banner {
-    height: 4;
-    padding: 1 0 0 0;
+    /* Two stacked lines (big ARTIST + small track) with padding between them.
+       6 cells = 24 dot-rows, enough for the ~19-dot block to sit centered with
+       breathing room above and below. */
+    height: 6;
+    padding: 0;
 }
 
 #visualizer {

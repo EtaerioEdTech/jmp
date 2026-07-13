@@ -433,32 +433,34 @@ class ProgressBar(Widget):
 
 
 class Banner(Widget):
-    """Big "ARTIST - TRACK" title rendered in Braille bitmap text.
+    """Two-line title in Braille bitmap text:
 
-    When the title is wider than the widget it scrolls as a marquee (looping),
-    otherwise it sits centered. Monochrome and transparent like the rest.
+        ARTIST   (big)
+        track    (half-size, below)
+
+    Each line is centered when it fits the width and marquees (loops) only when
+    the window is too narrow to hold it. Monochrome and transparent like the
+    rest.
     """
 
-    SCALE = 2          # font enlargement (each font pixel → 2×2 Braille dots)
-    SPEED = 1.4        # dot-columns scrolled per frame when marqueeing
-    SEP = "   -   "    # separator between fields — also joins the loop wrap so
-                       # the marquee reads as one perfectly even repeating line
+    ARTIST_SCALE = 2   # artist line (each font pixel → 2×2 Braille dots)
+    TRACK_SCALE = 1    # track line, half the height, below the artist
+    SPEED = 0.7        # dot-columns scrolled per frame when marqueeing
+    LOOP_SEP = " - "   # hyphen separator joining a marquee's wrap, so the end
+                       # of a scrolling title is clear before it repeats
+    LINE_GAP = 4       # dot-rows of vertical padding between artist and track
 
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
-        self._title = ""        # plain "ARTIST - TRACK" (centered case)
-        self._loop = ""         # title + trailing separator (marquee unit)
+        self._artist = ""       # top line
+        self._track = ""        # bottom line, shown smaller
         self._status = "stopped"
         self._scroll = 0.0
 
     def set_track(self, title: str, album: str, artist: str) -> None:
         # `album` is accepted for API compatibility but no longer shown.
-        parts = [p for p in (artist, title) if p]
-        self._title = self.SEP.join(parts)
-        # The looping unit ends with the same separator, so when it wraps the
-        # title flows into the next repeat with identical spacing — one even
-        # "ARTIST - TRACK - ARTIST - TRACK …" loop.
-        self._loop = self._title + self.SEP
+        self._artist = artist or ""
+        self._track = title or ""
         self._scroll = 0.0
         self.refresh()
 
@@ -476,27 +478,43 @@ class Banner(Widget):
         height = self.size.height
         if width <= 0 or height <= 0:
             return Text("")
-        if not self._title:
+        if not self._artist and not self._track:
             return Text("⠶  no track loaded", style="dim italic")
 
         canvas = Canvas(width, height)
-        text_w = text_width_dots(self._title, self.SCALE)
-        # Vertically center the glyphs in the available dot-rows.
-        y0 = max(0, (canvas.gh - text_height_dots(self.SCALE)) // 2)
 
-        if text_w <= canvas.gw:
-            # Fits: center it, no scrolling (plain title, no trailing separator).
-            x0 = (canvas.gw - text_w) // 2
-            draw_text(canvas, self._title, x0, y0, self.SCALE)
-        else:
-            # Marquee: repeat the loop unit (title + trailing separator) and
-            # slide left, so the title is clearly spaced from the next repeat.
-            period = text_width_dots(self._loop, self.SCALE)
-            off = int(self._scroll) % period
-            draw_text(canvas, self._loop, -off, y0, self.SCALE)
-            draw_text(canvas, self._loop, -off + period, y0, self.SCALE)
+        # Stack the two lines vertically: big artist, small track beneath, with
+        # LINE_GAP dot-rows of padding. Center the block in the available rows.
+        artist_h = text_height_dots(self.ARTIST_SCALE)
+        track_h = text_height_dots(self.TRACK_SCALE) if self._track else 0
+        gap = self.LINE_GAP if (self._artist and self._track) else 0
+        block_h = artist_h + gap + track_h
+        y0 = max(0, (canvas.gh - block_h) // 2)
+
+        if self._artist:
+            self._draw_line(canvas, self._artist, self.ARTIST_SCALE, y0, direction=1)
+        if self._track:
+            # Same scroll direction as the artist line above it.
+            self._draw_line(canvas, self._track, self.TRACK_SCALE, y0 + artist_h + gap, direction=1)
 
         return _canvas_to_text(canvas)
+
+    def _draw_line(self, canvas: Canvas, text: str, scale: int, y0: int, direction: int = -1) -> None:
+        """Draw one line: centered if it fits the width, else marqueed.
+
+        `direction` sets the scroll sense: -1 slides left, +1 slides right.
+        """
+        text_w = text_width_dots(text, scale)
+        if text_w <= canvas.gw:
+            x0 = (canvas.gw - text_w) // 2
+            draw_text(canvas, text, x0, y0, scale)
+            return
+        # Too wide → marquee. Repeat the line + a wrap gap so the loop is even.
+        loop = text + self.LOOP_SEP
+        period = text_width_dots(loop, scale)
+        off = (direction * int(self._scroll)) % period
+        draw_text(canvas, loop, -off, y0, scale)
+        draw_text(canvas, loop, -off + period, y0, scale)
 
 
 _STYLES = ("dim", "default", "bold")
