@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 import numpy as np
 from rich.text import Text
 from textual import events
 from textual.message import Message
 from textual.widget import Widget
 
-from .library import Album, Artist, Track
+from .library import Artist, Track
 
 
 class Browser(Widget, can_focus=True):
@@ -100,10 +98,12 @@ class Browser(Widget, can_focus=True):
         elif key in ("down", "j"):
             self._move(1)
             event.stop()
-        elif key == "enter":
+        elif key in ("right", "enter", "l"):
+            # Advance: drill in (or play a track).
             self._enter()
             event.stop()
-        elif key in ("left", "backspace", "escape", "h"):
+        elif key in ("left", "backspace", "h"):
+            # Retreat: back up a level.
             self._back()
             event.stop()
 
@@ -162,8 +162,8 @@ class Browser(Widget, can_focus=True):
 
     def _hint(self) -> str:
         if self._level == self.ARTISTS:
-            return "↑↓ move   ↵ open   q quit"
-        return "↑↓ move   ↵ open   ← back"
+            return "↑↓ move   → open   q quit"
+        return "↑↓ move   → open   ← back"
 
     def render(self) -> Text:
         width = self.size.width
@@ -178,12 +178,11 @@ class Browser(Widget, can_focus=True):
 
         for i, row in enumerate(self._rows):
             selected = i == self._cursor
+            # Selection is marked by the cursor + bold text only — no background
+            # fill, so the terminal shows through everywhere.
             marker = "› " if selected else "  "
-            style = "bold white on #2a2a3a" if selected else "default"
-            line = f"{marker}{row}"
-            if selected and width > 0:
-                line = line.ljust(width)  # full-width highlight bar
-            out.append(line + "\n", style=style)
+            style = "bold" if selected else "dim"
+            out.append(f"{marker}{row}\n", style=style)
 
         out.append("\n")
         out.append(self._hint(), style="dim")
@@ -191,14 +190,21 @@ class Browser(Widget, can_focus=True):
 
 
 class Visualizer(Widget):
-    """Renders frequency bars using Unicode half-block characters.
+    """A radial / mirrored ASCII spectrum.
 
-    Half-blocks give double vertical resolution: each character cell is
-    two "half-rows". Bars are colored green (low) to yellow (mid) to red (high),
-    classic EQ style.
+    The frequency spectrum is mirrored around a horizontal center line: each
+    band grows both up and down symmetrically, so the whole thing pulses like
+    a sculpted waveform rather than a flat row of bars. Intensity is drawn with
+    a density ramp of ASCII/box glyphs (faint dots for the fringes, solid
+    blocks at the core) — no color fills, so it stays fully transparent and
+    reads as ASCII art.
     """
 
-    DECAY = 0.72  # smoothing between frames so bars don't flicker
+    DECAY = 0.78  # smoothing between frames: fast attack, slow release
+
+    # Density ramp from the outer fringe of a band inward to its peak. The
+    # tip of a bar uses the first glyph; the core near the center uses the last.
+    RAMP = " ·:!|┃█"
 
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
@@ -225,54 +231,65 @@ class Visualizer(Widget):
         if width <= 0 or height <= 0:
             return Text("")
         if self._latest_bars is None:
-            msg = Text("[ no signal ]", style="dim italic")
-            padding = "\n" * (height // 2)
-            return Text(padding) + Text(" " * ((width - 12) // 2)) + msg
+            return self._idle(width, height)
 
-        # Resample bars to fit the display: each bar takes 2 columns (bar + gap).
-        n_bars = max(1, width // 2)
+        # One band per column (with a gap column between), resampled to width.
+        n_cols = max(1, (width + 1) // 2)
         source = self._latest_bars
-        indices = np.linspace(0, len(source) - 1, n_bars).astype(int)
+        indices = np.linspace(0, len(source) - 1, n_cols).astype(int)
         display = source[indices]
 
-        # Each character row = 2 half-cells of vertical resolution.
-        max_level = 2 * height
-        levels = np.clip(display * max_level, 0, max_level).astype(int)
+        # Mirror around the vertical center. Each half spans `half` rows.
+        half = max(1, height // 2)
+        center = half  # row index of the center line
+
+        # How many rows each band reaches out from the center (0..half).
+        reach = np.clip(display * half, 0, half)
+
+        ramp = self.RAMP
+        n_ramp = len(ramp) - 1  # index 0 is space (empty)
 
         lines: list[Text] = []
         for row in range(height):
-            row_from_bottom = height - row  # top row is height, bottom is 1
-            top_half = row_from_bottom * 2       # half-cell index for top of this row
-            bot_half = row_from_bottom * 2 - 1   # half-cell index for bottom of this row
-
-            frac = row_from_bottom / height
-            if frac > 0.75:
-                color = "bold red"
-            elif frac > 0.45:
-                color = "yellow"
-            else:
-                color = "green"
-
+            dist = abs(row - center)  # rows away from the center line
             line = Text()
-            for level in levels:
-                top_on = level >= top_half
-                bot_on = level >= bot_half
-                if top_on:
-                    char = "█"
-                elif bot_on:
-                    char = "▄"
+            for col_reach in reach:
+                if dist == 0:
+                    # Center line: a steady spine, brighter where energy is high.
+                    ch = "━" if col_reach < half * 0.5 else "═"
+                    style = "dim" if col_reach < half * 0.5 else "default"
+                elif dist <= col_reach:
+                    # Inside the bar. Density ramps up toward the center.
+                    frac = 1.0 - (dist - 1) / max(1, col_reach)  # 1 at core, ->0 at tip
+                    ramp_idx = 1 + int(frac * (n_ramp - 1))
+                    ramp_idx = max(1, min(n_ramp, ramp_idx))
+                    ch = ramp[ramp_idx]
+                    # Brighter near the core, dimmer at the fringes.
+                    style = "default" if frac > 0.55 else "dim"
                 else:
-                    char = " "
-                line.append(char, style=color)
-                line.append(" ")  # column gap
+                    ch = " "
+                    style = "default"
+                line.append(ch, style=style)
+                line.append(" ")  # gap column between bands
             lines.append(line)
 
-        # Join with newlines.
         result = Text()
         for i, line in enumerate(lines):
             if i > 0:
                 result.append("\n")
             result.append_text(line)
+        return result
+
+    def _idle(self, width: int, height: int) -> Text:
+        """A calm ASCII center line when nothing is playing."""
+        center = height // 2
+        result = Text()
+        for row in range(height):
+            if row > 0:
+                result.append("\n")
+            if row == center:
+                spine = "·" + " ·" * ((width - 1) // 2)
+                result.append(spine[:width], style="dim")
         return result
 
 
@@ -350,9 +367,6 @@ class NowPlaying(Widget):
             text.append(f"  ·  ", style="dim")
             text.append(self._album, style="italic")
         return text
-
-
-BROWSE_HINT = "b browse   space pause   n/p next/prev   +/- vol   q quit"
 
 
 def _format_time(seconds: float) -> str:

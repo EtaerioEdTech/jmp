@@ -13,11 +13,11 @@ BROWSER                            PLAYER
 
 ARTISTS                              ▶  Kid A
                                          Radiohead  ·  Kid A
-› Radiohead                    →
-  Aphex Twin                             █ █   █
-  Boards of Canada                     █ █ █ █ █ █
-                                       █ █ █ █ █ █ █
-↑↓ move   ↵ open   q quit             1:23 ████────── 4:12
+› Radiohead                    →       : ! | ┃ █ ┃ | ! :
+  Aphex Twin                           ━ ═ █ ═ █ ═ █ ═ ━
+  Boards of Canada                     : ! | ┃ █ ┃ | ! :
+                                       1:23 ████────── 4:12
+↑↓ move   → open   q quit
 ```
 
 ## Setup
@@ -47,22 +47,22 @@ python run.py /path/to/music     # scans a specific directory
 
 **Browser** (Artist → Album → Track drill-down):
 
-| Key           | Action                    |
-|---------------|---------------------------|
-| ↑ / ↓         | Move up / down the list   |
-| Enter         | Open (drill in) / play track |
-| ← / Backspace | Back up a level           |
+| Key           | Action                              |
+|---------------|-------------------------------------|
+| ↑ / ↓         | Move up / down the list             |
+| →             | Advance — drill in / play the track |
+| ← / Backspace | Retreat — back up a level           |
 
 **Player:**
 
-| Key         | Action                       |
-|-------------|------------------------------|
-| `b`         | Back to the browser          |
-| Space       | Pause / resume               |
-| `n`         | Next track                   |
-| `p`         | Previous track               |
-| `+` / `-`   | Volume up / down             |
-| `q`         | Quit                         |
+| Key           | Action              |
+|---------------|---------------------|
+| `b` / Escape  | Back to the browser |
+| Space         | Pause / resume      |
+| `n`           | Next track          |
+| `p`           | Previous track      |
+| `+` / `-`     | Volume up / down    |
+| `q`           | Quit                |
 
 ## How it works
 
@@ -70,7 +70,7 @@ python run.py /path/to/music     # scans a specific directory
 - **Browser** (`widgets.py`): a pure-text `Browser` widget renders a single-column list per level with a `›` cursor — no tree widget, no boxes. Enter drills Artists → Albums → Tracks; ← goes back up. Picking a track posts a message to the app.
 - **Modes** (`app.py`): the browser and player are two full-screen views toggled by `display`; only the active one is shown. Choosing a track hides the browser and shows the player; `b` returns.
 - **Playback** (`audio.py`): `pygame.mixer.music` streams the file from disk.
-- **Visualizer**: on load, `pydub` decodes the file to raw samples. NumPy computes a windowed FFT every 50 ms and bins the result into 32 log-spaced frequency bands (~40 Hz to 16 kHz). During playback the widget indexes into this precomputed spectrogram by `get_pos_ms()`.
+- **Visualizer**: on load, `pydub` decodes the file to raw samples. NumPy computes a windowed FFT every 50 ms and bins the result into 32 log-spaced frequency bands (~40 Hz to 16 kHz). During playback the widget indexes into this precomputed spectrogram by `get_pos_ms()`. It's drawn as a **radial / mirrored spectrum**: each band grows symmetrically above and below a center spine, with a density ramp of ASCII glyphs (`·:!|┃█`) — faint at the fringes, solid at the core. No color fills, so it stays fully transparent.
 
 ## Supported formats
 

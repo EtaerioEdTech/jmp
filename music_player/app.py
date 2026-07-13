@@ -39,6 +39,7 @@ class MusicPlayerApp(App):
 
     BINDINGS = [
         ("b", "browse", "Browse"),
+        ("escape", "browse", "Browse"),
         ("space", "toggle_play", "Play / Pause"),
         ("n", "next_track", "Next"),
         ("p", "prev_track", "Prev"),
