@@ -22,8 +22,9 @@ Screen {
     padding: 1 2;
 }
 
-#now-playing {
+#banner {
     height: 4;
+    padding: 1 0 0 0;
 }
 
 #visualizer {

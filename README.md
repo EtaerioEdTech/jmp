@@ -61,6 +61,7 @@ python run.py [/path/to/music]
 | ↑ / ↓         | Move up / down the list             |
 | →             | Advance — drill in / play the track |
 | ← / Backspace | Retreat — back up a level           |
+| `S`           | Shuffle the highlighted folder (all of an artist's songs, or an album) |
 
 **Player:**
 
@@ -78,7 +79,8 @@ python run.py [/path/to/music]
 
 - **Library scan** (`library.py`): walks the music directory, reads ID3 / Vorbis / FLAC tags with `mutagen`, groups tracks into Artist → Album → Track.
 - **Browser** (`widgets.py`): a pure-text `Browser` widget renders a single-column list per level with a Braille `⣿` cursor and a Braille rule under the heading — no tree widget, no boxes. → drills Artists → Albums → Tracks; ← goes back up. Picking a track posts a message to the app.
-- **Modes** (`app.py`): the browser and player are two full-screen views toggled by `display`; only the active one is shown. Choosing a track hides the browser and shows the player; `b`/Escape returns.
+- **Modes** (`app.py`): the browser and player are two full-screen views toggled by `display`; only the active one is shown. Choosing a track hides the browser and shows the player; `b`/Escape returns. Pressing `S` in the browser shuffles the highlighted folder (an artist's whole catalogue, or a single album) into a playlist.
+- **Banner** (`widgets.py`): the player's title is "ARTIST - TRACK - ALBUM" rendered big in a Braille bitmap font (`braille.py`), scrolling as a marquee when it's wider than the screen.
 - **Braille rendering** (`braille.py`): a small `Canvas` rasterizes points/lines/bars into a 2×4-dots-per-cell sub-pixel grid (8× resolution) and packs each block into one Braille glyph, fully vectorized in NumPy. The visualizer, progress bar, browser cursor and play icons all use it, so the whole UI reads as one fine, futuristic, monochrome (transparent) system.
 - **Playback** (`audio.py`): `pygame.mixer.music` streams the file from disk.
 - **Visualizer**: on load, `pydub` decodes the file to raw samples. NumPy computes a windowed FFT every 50 ms into 32 log-spaced frequency bands (~40 Hz to 16 kHz), and keeps a downsampled copy of the raw waveform. During playback the widget indexes into these by `get_pos_ms()`. Press `v` to cycle seven modes: **waveform** (oscilloscope of the raw signal), **spectrum** (vertical bars), **mirror** (spectrum reflected above/below a center line), **inverted** (spectrum as negative space — the field is filled and the bars are carved out as gaps), **envelope** (a smooth amplitude-envelope waveform — rolling loudness hills that stay legible even at full volume, where the raw scope dissolves into noise), **waterfall** (a scrolling time × frequency spectrogram history), and **rings** (concentric rings that pulse outward with energy). All are Braille-rendered and hold 30 fps (~1–3 ms/frame), scaling their resolution to the terminal size.

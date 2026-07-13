@@ -7,13 +7,15 @@ monochrome (brightness only) so it stays transparent and futuristic.
 
 from __future__ import annotations
 
+import random
+
 import numpy as np
 from rich.text import Text
 from textual import events
 from textual.message import Message
 from textual.widget import Widget
 
-from .braille import Canvas
+from .braille import Canvas, draw_text, text_height_dots, text_width_dots
 from .library import Artist, Track
 
 
@@ -39,6 +41,14 @@ class Browser(Widget, can_focus=True):
             self.playlist = playlist
             self.artist = artist
             self.album = album
+
+    class ShuffleChosen(Message):
+        """Posted when the user shuffles the highlighted artist/album/track."""
+
+        def __init__(self, tracks: list[Track], scope: str) -> None:
+            super().__init__()
+            self.tracks = tracks   # already shuffled
+            self.scope = scope     # human label, e.g. "Radiohead" or "Kid A"
 
     def __init__(self, library: dict[str, Artist], **kwargs) -> None:
         super().__init__(**kwargs)
@@ -112,6 +122,32 @@ class Browser(Widget, can_focus=True):
             # Retreat: back up a level.
             self._back()
             event.stop()
+        elif key in ("s", "S"):
+            self._shuffle()
+            event.stop()
+
+    def _shuffle(self) -> None:
+        """Shuffle the folder under the cursor: all of an artist's songs, a
+        whole album, or (on a track) that track's album."""
+        if not self._rows:
+            return
+        if self._level == self.ARTISTS:
+            name = self._artists_sorted()[self._cursor]
+            artist = self._library[name]
+            tracks = [t for alb in artist.albums.values() for t in alb.tracks]
+            scope = name
+        elif self._level == self.ALBUMS:
+            name = self._albums_sorted()[self._cursor]
+            tracks = list(self._library[self._artist_name].albums[name].tracks)
+            scope = name
+        else:  # TRACKS: shuffle the album this track belongs to
+            tracks = list(self._tracks())
+            scope = self._album_name
+        if not tracks:
+            return
+        shuffled = list(tracks)
+        random.shuffle(shuffled)
+        self.post_message(self.ShuffleChosen(shuffled, scope))
 
     def _move(self, delta: int) -> None:
         if not self._rows:
@@ -168,8 +204,8 @@ class Browser(Widget, can_focus=True):
 
     def _hint(self) -> str:
         if self._level == self.ARTISTS:
-            return "↑↓ move   → open   q quit"
-        return "↑↓ move   → open   ← back"
+            return "↑↓ move   → open   s shuffle   q quit"
+        return "↑↓ move   → open   ← back   s shuffle"
 
     def render(self) -> Text:
         width = self.size.width
@@ -303,24 +339,7 @@ class Visualizer(Widget):
 
     def _emit(self, canvas: Canvas) -> Text:
         """Turn a Canvas into styled Braille Text (transparent, dim→bold)."""
-        codes = canvas.codes()
-        density = canvas.density()
-        styles = ("dim", "default", "bold")
-        result = Text()
-        for r in range(canvas.height):
-            if r > 0:
-                result.append("\n")
-            row_codes = codes[r]
-            row_den = density[r]
-            for c in range(canvas.width):
-                code = int(row_codes[c])
-                if code == 0:
-                    result.append(" ")
-                else:
-                    d = row_den[c]
-                    tier = 2 if d >= 5 else (1 if d >= 3 else 0)
-                    result.append(chr(0x2800 + code), style=styles[tier])
-        return result
+        return _canvas_to_text(canvas)
 
     # ---- individual modes ----
 
@@ -507,55 +526,86 @@ class ProgressBar(Widget):
         return out
 
 
-class NowPlaying(Widget):
-    """Shows current track title, album, artist, and the active viz mode.
+class Banner(Widget):
+    """Big "ARTIST - TRACK - ALBUM" title rendered in Braille bitmap text.
 
-    Monochrome — brightness only (bold / normal / dim) so it stays transparent
-    and on-theme with the Braille rendering. Play/pause icons are Braille dots.
+    When the title is wider than the widget it scrolls as a marquee (looping),
+    otherwise it sits centered. Monochrome and transparent like the rest.
     """
 
-    # Braille "glyph" status icons keep the whole UI in one visual language.
-    _ICON = {"playing": "⣸⣷", "paused": "⣇⣸", "stopped": "⣿⣿"}
+    SCALE = 2          # font enlargement (each font pixel → 2×2 Braille dots)
+    SPEED = 1.4        # dot-columns scrolled per frame when marqueeing
+    GAP = 10           # blank dot-columns between marquee loops
 
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
         self._title = ""
-        self._album = ""
-        self._artist = ""
         self._status = "stopped"
-        self._viz_label = ""
+        self._scroll = 0.0
 
     def set_track(self, title: str, album: str, artist: str) -> None:
-        self._title = title
-        self._album = album
-        self._artist = artist
+        parts = [p for p in (artist, title, album) if p]
+        self._title = "   -   ".join(parts)
+        self._scroll = 0.0
         self.refresh()
 
     def set_status(self, status: str) -> None:
-        """status is one of: playing, paused, stopped."""
         self._status = status
         self.refresh()
 
-    def set_viz_label(self, label: str) -> None:
-        self._viz_label = label
+    def tick(self) -> None:
+        """Advance the marquee scroll; called each frame by the app."""
+        self._scroll += self.SPEED
         self.refresh()
 
     def render(self) -> Text:
+        width = self.size.width
+        height = self.size.height
+        if width <= 0 or height <= 0:
+            return Text("")
         if not self._title:
             return Text("⠶  no track loaded", style="dim italic")
 
-        icon = self._ICON.get(self._status, "⣿⣿")
-        text = Text()
-        text.append(f"{icon}  ", style="bold")
-        text.append(self._title, style="bold")
-        if self._viz_label:
-            text.append(f"     ⟩ {self._viz_label}", style="dim")
-        text.append("\n")
-        text.append(f"      {self._artist}", style="default")
-        if self._album:
-            text.append("  ·  ", style="dim")
-            text.append(self._album, style="dim italic")
-        return text
+        canvas = Canvas(width, height)
+        text_w = text_width_dots(self._title, self.SCALE)
+        # Vertically center the glyphs in the available dot-rows.
+        y0 = max(0, (canvas.gh - text_height_dots(self.SCALE)) // 2)
+
+        if text_w <= canvas.gw:
+            # Fits: center it, no scrolling.
+            x0 = (canvas.gw - text_w) // 2
+            draw_text(canvas, self._title, x0, y0, self.SCALE)
+        else:
+            # Marquee: draw the text twice (with a gap) and slide left, looping.
+            period = text_w + self.GAP
+            off = int(self._scroll) % period
+            draw_text(canvas, self._title, -off, y0, self.SCALE)
+            draw_text(canvas, self._title, -off + period, y0, self.SCALE)
+
+        return _canvas_to_text(canvas)
+
+
+def _canvas_to_text(canvas: Canvas) -> Text:
+    """Turn a Braille Canvas into styled Text (transparent; dim→normal→bold by
+    per-cell dot density)."""
+    codes = canvas.codes()
+    density = canvas.density()
+    styles = ("dim", "default", "bold")
+    result = Text()
+    for r in range(canvas.height):
+        if r > 0:
+            result.append("\n")
+        row_codes = codes[r]
+        row_den = density[r]
+        for c in range(canvas.width):
+            code = int(row_codes[c])
+            if code == 0:
+                result.append(" ")
+            else:
+                d = row_den[c]
+                tier = 2 if d >= 5 else (1 if d >= 3 else 0)
+                result.append(chr(0x2800 + code), style=styles[tier])
+    return result
 
 
 def _format_time(seconds: float) -> str:
