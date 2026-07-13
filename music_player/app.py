@@ -19,7 +19,7 @@ from pathlib import Path
 
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
-from textual.widgets import Footer, Header, Tree
+from textual.widgets import Footer, Tree
 from textual.widgets.tree import TreeNode
 
 from .audio import AudioEngine
@@ -58,7 +58,6 @@ class MusicPlayerApp(App):
     # ---- Textual lifecycle ----
 
     def compose(self) -> ComposeResult:
-        yield Header(show_clock=True)
         with Horizontal():
             with Vertical(id="left-pane"):
                 yield Tree("♪ Library", id="library-tree")

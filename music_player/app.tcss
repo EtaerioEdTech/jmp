@@ -1,12 +1,16 @@
-/* Layout: left pane for library tree, right pane for player. */
+/* Layout: left pane for library tree, right pane for player.
+   Styling is deliberately minimal so the app feels like part of the
+   terminal rather than a boxed-in application: transparent backgrounds
+   (the terminal's own theme shows through) and no solid frames. */
 
 Screen {
-    background: #0d0d12;
+    background: transparent;
 }
 
 #left-pane {
     width: 42%;
-    border-right: solid #444;
+    /* A faint vertical rule instead of a solid border box. */
+    border-right: vkey #333;
     padding: 0 1;
 }
 
@@ -30,10 +34,10 @@ Tree > .tree--label {
     color: #d0d0d0;
 }
 
+/* Sections separated by spacing, not full-width rules. */
 #now-playing {
     height: 4;
-    padding: 1;
-    border-bottom: solid #333;
+    padding: 1 0 0 0;
 }
 
 #visualizer {
@@ -43,14 +47,10 @@ Tree > .tree--label {
 
 #progress {
     height: 3;
-    padding: 1;
-    border-top: solid #333;
+    padding: 0 0 1 0;
 }
 
-Header {
-    background: #1a1a2e;
-}
-
+/* Footer reads as a hint line, not a status bar. */
 Footer {
-    background: #1a1a2e;
+    background: transparent;
 }
