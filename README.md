@@ -68,7 +68,7 @@ python run.py [/path/to/music]
 | Key           | Action                                        |
 |---------------|-----------------------------------------------|
 | `b` / Escape  | Back to the browser                           |
-| `v`           | Cycle visualizer (7 modes, see below) |
+| `v`           | Cycle visualizer (spectrum bars / mirror) |
 | Space         | Pause / resume                                |
 | `n`           | Next track                                    |
 | `p`           | Previous track                                |
@@ -83,7 +83,7 @@ python run.py [/path/to/music]
 - **Banner** (`widgets.py`): the player's title is "ARTIST - TRACK - ALBUM" rendered big in a Braille bitmap font (`braille.py`), scrolling as a marquee when it's wider than the screen.
 - **Braille rendering** (`braille.py`): a small `Canvas` rasterizes points/lines/bars into a 2×4-dots-per-cell sub-pixel grid (8× resolution) and packs each block into one Braille glyph, fully vectorized in NumPy. The visualizer, progress bar, browser cursor and play icons all use it, so the whole UI reads as one fine, futuristic, monochrome (transparent) system.
 - **Playback** (`audio.py`): `pygame.mixer.music` streams the file from disk.
-- **Visualizer**: on load, `pydub` decodes the file to raw samples. NumPy computes a windowed FFT every 50 ms into 32 log-spaced frequency bands (~40 Hz to 16 kHz), and keeps a downsampled copy of the raw waveform. During playback the widget indexes into these by `get_pos_ms()`. Press `v` to cycle seven modes: **waveform** (oscilloscope of the raw signal), **spectrum** (vertical bars), **mirror** (spectrum reflected above/below a center line), **inverted** (spectrum as negative space — the field is filled and the bars are carved out as gaps), **envelope** (a smooth amplitude-envelope waveform — rolling loudness hills that stay legible even at full volume, where the raw scope dissolves into noise), **waterfall** (a scrolling time × frequency spectrogram history), and **rings** (concentric rings that pulse outward with energy). All are Braille-rendered and hold 30 fps (~1–3 ms/frame), scaling their resolution to the terminal size.
+- **Visualizer**: on load, `pydub` decodes the file to raw samples. NumPy computes a windowed FFT every 50 ms into 32 log-spaced frequency bands (~40 Hz to 16 kHz), and keeps a downsampled copy of the raw waveform. During playback the widget indexes into these by `get_pos_ms()`. Press `v` to switch between two modes: **spectrum** (32-band frequency bars) and **mirror** (the spectrum reflected above and below a center line). Both are Braille-rendered and hold 30 fps, scaling their resolution to the terminal size.
 
 ## Supported formats
 

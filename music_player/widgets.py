@@ -245,27 +245,15 @@ class Visualizer(Widget):
     brightness is carried by dim/normal/bold styling, never color fills.
 
     Modes (cycle with the `v` key):
-        - "scope"    : oscilloscope of the raw waveform
         - "bars"     : 32-band frequency spectrum as vertical bars
         - "mirror"   : spectrum mirrored above/below a center line
-        - "inverted" : spectrum as negative space — field filled, bars carved out
-        - "envelope" : smooth amplitude-envelope hills (never noisy, even loud)
-        - "waterfall": scrolling time × frequency spectrogram history
-        - "rings"    : concentric rings that pulse outward with energy
     """
 
-    MODES = ("scope", "bars", "mirror", "inverted", "envelope", "waterfall", "rings")
+    MODES = ("bars", "mirror")
     MODE_LABELS = {
-        "scope": "WAVEFORM",
         "bars": "SPECTRUM",
         "mirror": "MIRROR",
-        "inverted": "INVERTED",
-        "envelope": "ENVELOPE",
-        "waterfall": "WATERFALL",
-        "rings": "RINGS",
     }
-
-    HISTORY = 96  # frames of spectrum/energy history kept for scrolling modes
 
     DECAY = 0.80  # spectrum smoothing between frames: fast attack, slow release
 
@@ -273,11 +261,6 @@ class Visualizer(Widget):
         super().__init__(**kwargs)
         self._mode_idx = 0
         self._smoothed: np.ndarray | None = None   # smoothed spectrum bars
-        self._wave: np.ndarray | None = None        # latest raw waveform slice
-        self._phase = 0.0
-        # Rolling history for the scrolling / pulsing modes.
-        self._spec_hist: list[np.ndarray] = []      # recent spectrum frames
-        self._energy_hist: list[float] = []         # recent overall loudness
 
     @property
     def mode(self) -> str:
@@ -294,8 +277,8 @@ class Visualizer(Widget):
         return self.mode_label
 
     def update_frame(self, bars: np.ndarray | None, wave: np.ndarray | None) -> None:
-        """Feed the current spectrum + waveform, advance animation, refresh."""
-        self._phase += 0.05
+        """Feed the current spectrum, advance animation, refresh. (`wave` is
+        accepted for API compatibility but unused by the current modes.)"""
         if bars is None:
             self._smoothed = None
         else:
@@ -304,15 +287,6 @@ class Visualizer(Widget):
                 self._smoothed = b.copy()
             else:
                 self._smoothed = np.maximum(b, self._smoothed * self.DECAY)
-        self._wave = None if wave is None else np.asarray(wave, dtype=float)
-
-        # Push a frame of history for the scrolling / pulsing modes.
-        if self._smoothed is not None:
-            self._spec_hist.append(self._smoothed.copy())
-            self._energy_hist.append(float(self._smoothed.mean()))
-            if len(self._spec_hist) > self.HISTORY:
-                self._spec_hist.pop(0)
-                self._energy_hist.pop(0)
         self.refresh()
 
     # ---- rendering ----
@@ -324,16 +298,10 @@ class Visualizer(Widget):
             return Text("")
 
         canvas = Canvas(width, height)
-        draw = {
-            "scope": self._draw_scope,
-            "bars": self._draw_bars,
-            "mirror": self._draw_mirror,
-            "inverted": self._draw_inverted,
-            "envelope": self._draw_envelope,
-            "waterfall": self._draw_waterfall,
-            "rings": self._draw_rings,
-        }[self.mode]
-        draw(canvas)
+        if self.mode == "bars":
+            self._draw_bars(canvas)
+        else:
+            self._draw_mirror(canvas)
 
         return self._emit(canvas)
 
@@ -342,22 +310,6 @@ class Visualizer(Widget):
         return _canvas_to_text(canvas)
 
     # ---- individual modes ----
-
-    def _draw_scope(self, canvas: Canvas) -> None:
-        """Oscilloscope: the raw waveform as a wiggling line down the middle."""
-        wave = self._wave
-        if wave is None or len(wave) < 2:
-            self._draw_flatline(canvas)
-            return
-        # Resample the waveform to one point per dot-column.
-        n = canvas.gw
-        idx = np.linspace(0, len(wave) - 1, n).astype(int)
-        w = wave[idx]
-        # Map amplitude [-1,1] to dot rows, centered, with a little headroom.
-        mid = (canvas.gh - 1) / 2.0
-        ys = mid - w * mid * 0.9
-        xs = np.arange(n)
-        canvas.line(xs, ys, oversample=2)
 
     def _draw_flatline(self, canvas: Canvas) -> None:
         """A calm centered line when there's no signal yet."""
@@ -396,92 +348,6 @@ class Visualizer(Widget):
             top = int(mid - r)
             bot = int(mid + r)
             canvas.buf[max(0, top):min(canvas.gh, bot + 1), c] += 1.0
-
-    def _draw_inverted(self, canvas: Canvas) -> None:
-        """Negative-space spectrum: fill the whole field, carve the bars out as
-        gaps so the spectrum reads as a silhouette."""
-        canvas.buf[:] = 1.0  # fill everything
-        bars = self._smoothed
-        if bars is None:
-            return
-        n_cols = canvas.gw
-        idx = np.linspace(0, len(bars) - 1, n_cols).astype(int)
-        vals = np.clip(bars[idx], 0, 1)
-        heights = (vals * canvas.gh).astype(int)
-        for c in range(n_cols):
-            h = heights[c]
-            if h > 0:
-                # Clear (carve out) the bar column from the bottom up.
-                canvas.buf[canvas.gh - h:canvas.gh, c] = 0.0
-
-    def _draw_envelope(self, canvas: Canvas) -> None:
-        """Amplitude-envelope waveform: smooth loudness hills, not raw samples,
-        so it never dissolves into noise at high volume."""
-        wave = self._wave
-        if wave is None or len(wave) < 2:
-            self._draw_flatline(canvas)
-            return
-        n = canvas.gw
-        # Split the window into `n` chunks; each chunk's envelope is its peak
-        # absolute amplitude. This is a smooth outline, not the raw wiggle.
-        edges = np.linspace(0, len(wave), n + 1).astype(int)
-        env = np.array([
-            np.abs(wave[edges[i]:edges[i + 1]]).max() if edges[i + 1] > edges[i] else 0.0
-            for i in range(n)
-        ])
-        # Light smoothing so the hills flow.
-        k = np.array([0.25, 0.5, 0.25])
-        env = np.convolve(env, k, mode="same")
-        env = np.clip(env, 0, 1)
-        mid = (canvas.gh - 1) / 2.0
-        xs = np.arange(n)
-        top = mid - env * mid * 0.95
-        bot = mid + env * mid * 0.95
-        # Fill the mirrored envelope so it reads as a solid flowing shape.
-        for c in range(n):
-            canvas.buf[int(top[c]):int(bot[c]) + 1, c] += 1.0
-
-    def _draw_waterfall(self, canvas: Canvas) -> None:
-        """Scrolling spectrogram: newest frame on the right, scrolling left;
-        frequency runs bottom (low) to top (high), density = energy."""
-        hist = self._spec_hist
-        if not hist:
-            self._draw_flatline(canvas)
-            return
-        gw, gh = canvas.gw, canvas.gh
-        # Take the most recent `gw` frames (one per dot-column), oldest → left.
-        frames = hist[-gw:]
-        start_col = gw - len(frames)
-        for i, frame in enumerate(frames):
-            col = start_col + i
-            # Resample this frame's bands up the column (low freq at bottom).
-            idx = np.linspace(0, len(frame) - 1, gh).astype(int)
-            colvals = np.clip(frame[idx], 0, 1)
-            # Light a dot where energy clears a small threshold; brighter dots
-            # (higher buf value) read bolder via the density tiers in _emit.
-            lit = colvals > 0.12
-            canvas.buf[gh - 1 - np.arange(gh)[lit], col] = 1.0 + colvals[lit] * 5.0
-
-    def _draw_rings(self, canvas: Canvas) -> None:
-        """Concentric rings rippling outward; recent loudness sets their radii
-        so beats send pulses out from the center."""
-        cx = (canvas.gw - 1) / 2.0
-        cy = (canvas.gh - 1) / 2.0
-        max_r = min(cx, cy)
-        energy = self._energy_hist[-24:] if self._energy_hist else [0.1]
-        # A few rings, each expanding with the phase and modulated by a recent
-        # energy sample, wrapping around so they ripple outward continuously.
-        n_rings = 5
-        theta = np.linspace(0, 2 * np.pi, 240)
-        ct, st = np.cos(theta), np.sin(theta) * 0.5  # squash y → round rings
-        for k in range(n_rings):
-            # Expanding radius that wraps 0→1; offset per ring so they trail.
-            frac = ((self._phase * 0.15) + k / n_rings) % 1.0
-            e = energy[-1 - (k % len(energy))]
-            r = frac * max_r * (0.7 + 0.6 * float(np.clip(e, 0, 1)))
-            if r < 1:
-                continue
-            canvas.plot(cx + ct * r, cy + st * r)
 
 
 class ProgressBar(Widget):
@@ -535,17 +401,23 @@ class Banner(Widget):
 
     SCALE = 2          # font enlargement (each font pixel → 2×2 Braille dots)
     SPEED = 1.4        # dot-columns scrolled per frame when marqueeing
-    GAP = 10           # blank dot-columns between marquee loops
+    # Separator appended between marquee loops so "…ALBUM" reads clearly apart
+    # from the "ARTIST…" that follows it when the text wraps around.
+    LOOP_SEP = "      ·      "
 
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
-        self._title = ""
+        self._title = ""        # plain "ARTIST - TRACK - ALBUM" (centered case)
+        self._loop = ""         # title + trailing separator (marquee unit)
         self._status = "stopped"
         self._scroll = 0.0
 
     def set_track(self, title: str, album: str, artist: str) -> None:
         parts = [p for p in (artist, title, album) if p]
         self._title = "   -   ".join(parts)
+        # The looping unit carries trailing spaces so consecutive loops don't
+        # run the album straight into the artist name.
+        self._loop = self._title + self.LOOP_SEP
         self._scroll = 0.0
         self.refresh()
 
@@ -572,15 +444,16 @@ class Banner(Widget):
         y0 = max(0, (canvas.gh - text_height_dots(self.SCALE)) // 2)
 
         if text_w <= canvas.gw:
-            # Fits: center it, no scrolling.
+            # Fits: center it, no scrolling (plain title, no trailing separator).
             x0 = (canvas.gw - text_w) // 2
             draw_text(canvas, self._title, x0, y0, self.SCALE)
         else:
-            # Marquee: draw the text twice (with a gap) and slide left, looping.
-            period = text_w + self.GAP
+            # Marquee: repeat the loop unit (title + trailing separator) and
+            # slide left, so the album is clearly spaced from the next artist.
+            period = text_width_dots(self._loop, self.SCALE)
             off = int(self._scroll) % period
-            draw_text(canvas, self._title, -off, y0, self.SCALE)
-            draw_text(canvas, self._title, -off + period, y0, self.SCALE)
+            draw_text(canvas, self._loop, -off, y0, self.SCALE)
+            draw_text(canvas, self._loop, -off + period, y0, self.SCALE)
 
         return _canvas_to_text(canvas)
 
