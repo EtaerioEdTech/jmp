@@ -363,12 +363,12 @@ class ProgressBar(Widget):
         self._total = total_seconds
         self.refresh()
 
-    # A Braille cell is 4 dots tall. The elapsed portion is the slim, centered
-    # middle-two-dot line; the remaining track is the full-height block. As the
-    # song plays the tall block collapses to the centered line behind the
-    # playhead — the bar "fills in" from the top and bottom toward the middle.
-    _DONE = chr(0x2836)   # ⠶ middle two dot-rows — elapsed (slim centered line)
-    _TRACK = chr(0x28FF)  # ⣿ full cell — remaining track
+    # A Braille cell is 4 dots tall. The elapsed portion is the solid full-cell
+    # block; the remaining track is the slim, vertically centered two-dot line.
+    # So the bar fills with solid from the left as the song plays, leaving a
+    # thin centered channel ahead of the playhead.
+    _DONE = chr(0x28FF)   # ⣿ full cell — elapsed (solid)
+    _TRACK = chr(0x2836)  # ⠶ middle two dot-rows — remaining (slim centered line)
 
     def render(self) -> Text:
         width = self.size.width
@@ -401,9 +401,8 @@ class Banner(Widget):
 
     SCALE = 2          # font enlargement (each font pixel → 2×2 Braille dots)
     SPEED = 1.4        # dot-columns scrolled per frame when marqueeing
-    # Separator appended between marquee loops so "…ALBUM" reads clearly apart
-    # from the "ARTIST…" that follows it when the text wraps around.
-    LOOP_SEP = "      ·      "
+    SEP = "   -   "    # separator between fields — also joins the loop wrap so
+                       # the marquee reads as one perfectly even repeating line
 
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
@@ -414,10 +413,11 @@ class Banner(Widget):
 
     def set_track(self, title: str, album: str, artist: str) -> None:
         parts = [p for p in (artist, title, album) if p]
-        self._title = "   -   ".join(parts)
-        # The looping unit carries trailing spaces so consecutive loops don't
-        # run the album straight into the artist name.
-        self._loop = self._title + self.LOOP_SEP
+        self._title = self.SEP.join(parts)
+        # The looping unit ends with the same separator, so when it wraps the
+        # album flows into the next artist with identical spacing — one even
+        # "ARTIST - TRACK - ALBUM - ARTIST - TRACK - ALBUM …" loop.
+        self._loop = self._title + self.SEP
         self._scroll = 0.0
         self.refresh()
 
