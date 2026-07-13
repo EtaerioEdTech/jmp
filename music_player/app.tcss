@@ -40,3 +40,33 @@ Screen {
 Footer {
     background: transparent;
 }
+
+/* Directory prompt — a small floating dialog docked near the bottom.
+   Dim backdrop over the browser; the box itself stays understated. */
+DirPrompt {
+    align: center bottom;
+    background: $background 60%;
+}
+
+#dirprompt-box {
+    width: 80%;
+    max-width: 100;
+    height: auto;
+    padding: 1 2;
+    margin: 0 0 2 0;
+    background: $surface;
+    border: round $primary;
+}
+
+#dirprompt-label {
+    padding: 0 0 1 0;
+}
+
+#dirprompt-input {
+    width: 100%;
+}
+
+#dirprompt-hint {
+    padding: 1 0 0 0;
+    color: $text-muted;
+}

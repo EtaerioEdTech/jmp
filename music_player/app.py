@@ -26,6 +26,7 @@ from textual.containers import Vertical
 from textual.widgets import Footer
 
 from .audio import AudioEngine
+from .dirprompt import DirPrompt
 from .library import Track, scan_library
 from .widgets import Banner, Browser, ProgressBar, Visualizer
 
@@ -40,6 +41,7 @@ class MusicPlayerApp(App):
     BINDINGS = [
         ("b", "browse", "Browse"),
         ("escape", "browse", "Browse"),
+        ("d", "change_dir", "Dir"),
         ("space", "toggle_play", "Play / Pause"),
         ("v", "cycle_viz", "Visual"),
         ("n", "next_track", "Next"),
@@ -89,6 +91,28 @@ class MusicPlayerApp(App):
 
     def action_browse(self) -> None:
         self._show_browser()
+
+    def action_change_dir(self) -> None:
+        """Prompt for a new music root, then re-scan into the browser."""
+        self._show_browser()
+        self.push_screen(DirPrompt(str(self.music_dir)), self._on_dir_chosen)
+
+    def _on_dir_chosen(self, path: str | None) -> None:
+        if not path:
+            return  # cancelled
+        new_dir = Path(path).expanduser()
+        if not new_dir.is_dir():
+            self.notify(f"Not a directory: {new_dir}", severity="error")
+            return
+        library = scan_library(new_dir)
+        if not library:
+            # Keep the current library rather than swapping to an empty one.
+            self.notify(f"No audio files found in {new_dir}", severity="warning")
+            return
+        self.music_dir = new_dir
+        self.library = library
+        self.query_one("#browser", Browser).set_library(library)
+        self.notify(f"Loaded {new_dir}")
 
     # ---- browser -> play ----
 
