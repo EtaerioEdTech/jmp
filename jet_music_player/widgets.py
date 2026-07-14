@@ -470,7 +470,7 @@ class Visualizer(Widget):
         # whole block both horizontally and vertically.
         TEXT_GAP = DOT_H       # dot-rows between text and bar
         BAR_H = 3              # filled-bar thickness in dots
-        scale = 3
+        scale = 2
         while scale > 1 and (
             text_width_dots(label, scale) > gw - 4
             or text_height_dots(scale) + TEXT_GAP + BAR_H > gh
@@ -487,10 +487,9 @@ class Visualizer(Widget):
         tx = max(0, (gw - tw) // 2)
         draw_text(canvas, label, tx, ty, scale)
 
-        # --- meter bar, centered under the text and matched to its width so the
-        #     text + bar read as one tight unit ---
+        # --- meter bar, centered under the text and spanning most of the width ---
         bar_y = min(gh - 1, ty + th + TEXT_GAP + BAR_H // 2)
-        bar_w = min(gw - 4, tw + 6)   # a hair wider than the text
+        bar_w = gw - 2 * max(2, gw // 10)   # wide: ~80% of the visualizer width
         x_lo = (gw - bar_w) // 2
         x_hi = x_lo + bar_w
         fill_x = x_lo + int(round(bar_w * self._vol_value))
