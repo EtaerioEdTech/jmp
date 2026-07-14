@@ -463,51 +463,57 @@ class Visualizer(Widget):
         snapping back to the spectrum."""
         gw, gh = canvas.gw, canvas.gh
         pct = int(round(self._vol_value * 100))
-
-        # --- big percentage text, centered horizontally ---
         label = f"{pct}%"
-        # Largest bitmap-font scale that fits both the width and leaves at least
-        # ~4 dot-rows beneath the text for the meter.
+
+        # A tight block of: percentage text, a small gap, then the meter bar.
+        # Pick the largest scale that leaves room for the meter, then center the
+        # whole block both horizontally and vertically.
+        TEXT_GAP = DOT_H       # dot-rows between text and bar
+        BAR_H = 3              # filled-bar thickness in dots
         scale = 3
         while scale > 1 and (
             text_width_dots(label, scale) > gw - 4
-            or text_height_dots(scale) > gh - 5
+            or text_height_dots(scale) + TEXT_GAP + BAR_H > gh
         ):
             scale -= 1
         tw = text_width_dots(label, scale)
         th = text_height_dots(scale)
+
+        block_h = th + TEXT_GAP + BAR_H
+        # Vertically center the block; snap the text's top to the cell grid so
+        # its glyphs render solid rather than hollow.
+        top = max(0, (gh - block_h) // 2)
+        ty = _snap(top)
         tx = max(0, (gw - tw) // 2)
-        ty = 0  # top, cell-aligned so glyphs stay solid
         draw_text(canvas, label, tx, ty, scale)
 
-        # --- meter bar beneath the text ---
-        bar_y = _snap(min(gh - 2, th + DOT_H))
-        margin = max(2, gw // 12)
-        x_lo, x_hi = margin, gw - margin
-        bar_w = x_hi - x_lo
-        if bar_w <= 0:
-            return
+        # --- meter bar, centered under the text and matched to its width so the
+        #     text + bar read as one tight unit ---
+        bar_y = min(gh - 1, ty + th + TEXT_GAP + BAR_H // 2)
+        bar_w = min(gw - 4, tw + 6)   # a hair wider than the text
+        x_lo = (gw - bar_w) // 2
+        x_hi = x_lo + bar_w
         fill_x = x_lo + int(round(bar_w * self._vol_value))
 
-        # Unfilled remainder: sparse, faint tick dots (every 4th col) so the
-        # bar's full track is implied without the solid rule reading as noise.
+        # Unfilled remainder: sparse faint ticks so the full track is implied
+        # without a solid rule reading as noise.
         if fill_x < x_hi:
-            rest = np.arange(fill_x + 2, x_hi, 4)
+            rest = np.arange(fill_x + 2, x_hi, 3)
             if len(rest):
                 canvas.plot(rest, np.full_like(rest, bar_y))
 
-        # Filled portion: a 3-dot-tall bar whose top edge shimmers with a
+        # Filled portion: a BAR_H-tall bar whose top edge shimmers with a
         # travelling sine wave, so the level reads as "live".
         if fill_x > x_lo:
             xs = np.arange(x_lo, fill_x)
             phase = self._vol_anim * 0.6
             wobble = np.round(np.sin(xs * 0.4 + phase)).astype(int)  # -1..+1 dots
-            for dy in (-1, 0, 1):
+            for dy in range(-(BAR_H // 2), BAR_H // 2 + 1):
                 ys = np.clip(bar_y + dy + wobble, 0, gh - 1)
                 canvas.plot(xs, ys)
 
-        # Leading-edge spark: a small vertical burst at the fill head that
-        # jitters and is plotted twice (brighter) so it pops as the meter's tip.
+        # Leading-edge spark: a small vertical burst at the fill head, jittering
+        # and plotted twice (brighter) so it pops as the meter's live tip.
         if self._vol_value > 0.0:
             jitter = int(self._vol_anim) % 3 - 1
             tip = min(fill_x, x_hi - 1)
