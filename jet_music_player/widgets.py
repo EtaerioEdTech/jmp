@@ -15,7 +15,21 @@ from textual import events
 from textual.message import Message
 from textual.widget import Widget
 
-from .braille import Canvas, draw_text, text_height_dots, text_width_dots
+from .braille import (
+    DOT_H,
+    Canvas,
+    draw_text,
+    text_height_dots,
+    text_width_dots,
+)
+
+
+def _snap(dot_y: int) -> int:
+    """Round a dot-row offset down to a Braille cell boundary (multiple of
+    DOT_H). Bitmap-font text only renders solid when its top sits on a cell
+    boundary; off-grid offsets split each glyph across two rows of cells and it
+    reads as a hollow outline."""
+    return (dot_y // DOT_H) * DOT_H
 from .library import Artist, Track
 
 
@@ -358,10 +372,17 @@ class Visualizer(Widget):
 
     DECAY = 0.80  # spectrum smoothing between frames: fast attack, slow release
 
+    # When the volume changes, the spectrum is briefly replaced by a volume
+    # meter for VOLUME_FRAMES ticks (~1 s at 30 fps) before the spectrum returns.
+    VOLUME_FRAMES = 30
+
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
         self._mode_idx = 0
         self._smoothed: np.ndarray | None = None   # smoothed spectrum bars
+        self._vol_frames = 0        # ticks remaining to show the volume meter
+        self._vol_value = 0.0       # volume (0..1) to display
+        self._vol_anim = 0.0        # animation phase for the meter's flair
 
     @property
     def mode(self) -> str:
@@ -377,6 +398,14 @@ class Visualizer(Widget):
         self.refresh()
         return self.mode_label
 
+    def show_volume(self, volume: float) -> None:
+        """Momentarily replace the spectrum with a volume meter showing `volume`
+        (0..1). Called when the user changes the volume; auto-expires after
+        VOLUME_FRAMES ticks."""
+        self._vol_value = max(0.0, min(1.0, volume))
+        self._vol_frames = self.VOLUME_FRAMES
+        self.refresh()
+
     def update_frame(self, bars: np.ndarray | None, wave: np.ndarray | None) -> None:
         """Feed the current spectrum, advance animation, refresh. (`wave` is
         accepted for API compatibility but unused by the current modes.)"""
@@ -388,6 +417,10 @@ class Visualizer(Widget):
                 self._smoothed = b.copy()
             else:
                 self._smoothed = np.maximum(b, self._smoothed * self.DECAY)
+        # Count down the volume-meter overlay, if active.
+        if self._vol_frames > 0:
+            self._vol_frames -= 1
+            self._vol_anim += 1.0
         self.refresh()
 
     # ---- rendering ----
@@ -399,7 +432,9 @@ class Visualizer(Widget):
             return Text("")
 
         canvas = Canvas(width, height)
-        if self.mode == "bars":
+        if self._vol_frames > 0:
+            self._draw_volume(canvas)
+        elif self.mode == "bars":
             self._draw_bars(canvas)
         else:
             self._draw_mirror(canvas)
@@ -418,6 +453,70 @@ class Visualizer(Widget):
         xs = np.arange(canvas.gw)
         ys = np.full(canvas.gw, mid)
         canvas.plot(xs[::3], ys[::3])  # dotted, faint
+
+    def _draw_volume(self, canvas: Canvas) -> None:
+        """The transient volume overlay: a big "NN%" over an animated meter bar.
+
+        Flair: the filled part of the meter shimmers with a travelling wave, and
+        a little spark flickers at the fill's leading edge. Everything fades as
+        the overlay's remaining frames run out, so it dissolves rather than
+        snapping back to the spectrum."""
+        gw, gh = canvas.gw, canvas.gh
+        pct = int(round(self._vol_value * 100))
+
+        # --- big percentage text, centered horizontally ---
+        label = f"{pct}%"
+        # Largest bitmap-font scale that fits both the width and leaves at least
+        # ~4 dot-rows beneath the text for the meter.
+        scale = 3
+        while scale > 1 and (
+            text_width_dots(label, scale) > gw - 4
+            or text_height_dots(scale) > gh - 5
+        ):
+            scale -= 1
+        tw = text_width_dots(label, scale)
+        th = text_height_dots(scale)
+        tx = max(0, (gw - tw) // 2)
+        ty = 0  # top, cell-aligned so glyphs stay solid
+        draw_text(canvas, label, tx, ty, scale)
+
+        # --- meter bar beneath the text ---
+        bar_y = _snap(min(gh - 2, th + DOT_H))
+        margin = max(2, gw // 12)
+        x_lo, x_hi = margin, gw - margin
+        bar_w = x_hi - x_lo
+        if bar_w <= 0:
+            return
+        fill_x = x_lo + int(round(bar_w * self._vol_value))
+
+        # Unfilled remainder: sparse, faint tick dots (every 4th col) so the
+        # bar's full track is implied without the solid rule reading as noise.
+        if fill_x < x_hi:
+            rest = np.arange(fill_x + 2, x_hi, 4)
+            if len(rest):
+                canvas.plot(rest, np.full_like(rest, bar_y))
+
+        # Filled portion: a 3-dot-tall bar whose top edge shimmers with a
+        # travelling sine wave, so the level reads as "live".
+        if fill_x > x_lo:
+            xs = np.arange(x_lo, fill_x)
+            phase = self._vol_anim * 0.6
+            wobble = np.round(np.sin(xs * 0.4 + phase)).astype(int)  # -1..+1 dots
+            for dy in (-1, 0, 1):
+                ys = np.clip(bar_y + dy + wobble, 0, gh - 1)
+                canvas.plot(xs, ys)
+
+        # Leading-edge spark: a small vertical burst at the fill head that
+        # jitters and is plotted twice (brighter) so it pops as the meter's tip.
+        if self._vol_value > 0.0:
+            jitter = int(self._vol_anim) % 3 - 1
+            tip = min(fill_x, x_hi - 1)
+            spark_y = np.clip(
+                np.array([bar_y - 2 + jitter, bar_y, bar_y + 2 - jitter]), 0, gh - 1
+            )
+            spark_x = np.full_like(spark_y, tip)
+            canvas.plot(spark_x, spark_y)
+            canvas.plot(spark_x, spark_y)
 
     def _draw_bars(self, canvas: Canvas) -> None:
         """32-band spectrum as vertical Braille bars across the width."""
@@ -454,16 +553,44 @@ class Visualizer(Widget):
 class BrowserBanner(Widget):
     """The static Braille header shown above the file browser on the home page.
 
-    Two left-aligned lines in the same Braille bitmap font as the player banner:
-    a big "JET" (scale 2) with "MUSIC IN YOUR TERMINAL" (scale 1) beneath it.
-    Purely decorative and unchanging — no scrolling, no state.
+    A big left-aligned "JET" (scale 2) with "TERMINAL MUSIC PLAYER" (scale 1)
+    beneath it, in the same Braille bitmap font as the player banner. The
+    lettering stays put, but animated horizontal speed-streaks stream leftward
+    through its wake (the space to the right of "JET") to imply fast motion —
+    like wind rushing past. Driven each frame by the app's tick loop.
     """
 
     TITLE = "JET"
     TITLE_SCALE = 2
-    SUBTITLE = "MUSIC IN YOUR TERMINAL"
+    SUBTITLE = "TERMINAL MUSIC PLAYER"
     SUBTITLE_SCALE = 1
-    LINE_GAP = 3   # dot-rows between the two lines
+    LINE_GAP = 3       # dot-rows between line 1 and the subtitle
+
+    # Wind streaks: horizontal dashes flowing left through the wake to the right
+    # of the letters. Each streak gets its own continuous-random speed, phase,
+    # length and loop period (see _wind_streaks), so no two ever line up into a
+    # repeating vertical "wall" — the motion reads as chaotic rushing air.
+    WIND_LANES = (1, 3, 5, 7, 9)   # dot-rows within the 10-dot title band
+    WIND_PER_LANE = 2              # streaks per lane (kept low so long streaks in
+                                   # the same lane rarely collide into a blob)
+    WIND_GAP = 3                   # dot-cols between the letters and the wake
+    WIND_SPEED_MIN = 1.8           # dots/frame
+    WIND_SPEED_MAX = 3.6
+    WIND_LEN_MIN = 7               # dash length in dots (longer than before)
+    WIND_LEN_MAX = 12
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._phase = 0.0
+        # Streak parameters, generated lazily once we know the wake width. Kept
+        # fixed thereafter so the streaks don't flicker/regenerate each frame.
+        self._streaks: list[tuple[int, float, float, int, float]] | None = None
+        self._streaks_span = -1
+
+    def tick(self) -> None:
+        """Advance the wind animation; called each frame by the app."""
+        self._phase += 1.0
+        self.refresh()
 
     def render(self) -> Text:
         width = self.size.width
@@ -472,11 +599,66 @@ class BrowserBanner(Widget):
             return Text("")
 
         canvas = Canvas(width, height)
-        # Left-aligned: both lines start at the left edge (dot x = 0).
+        title_w = text_width_dots(self.TITLE, self.TITLE_SCALE)
+        title_h = text_height_dots(self.TITLE_SCALE)
+
+        # Wind first, in the wake to the right of the letters, so the letters
+        # (drawn next) always sit clean on top.
+        self._draw_wind(canvas, wake_x0=title_w + self.WIND_GAP, band_h=title_h)
+
+        # Line 1: "JET", left-aligned, on top of the wind.
         draw_text(canvas, self.TITLE, 0, 0, self.TITLE_SCALE)
-        y1 = text_height_dots(self.TITLE_SCALE) + self.LINE_GAP
+
+        # Line 2: subtitle, snapped to the cell grid so its glyphs stay solid.
+        y1 = _snap(title_h + self.LINE_GAP)
         draw_text(canvas, self.SUBTITLE, 0, y1, self.SUBTITLE_SCALE)
         return _canvas_to_text(canvas)
+
+    def _wind_streaks(self, span: int, band_h: int):
+        """Return the fixed per-streak parameters for a given wake `span`, one
+        tuple ``(y, speed, offset, length, period)`` per streak:
+
+          * ``speed``  — drawn from a continuous range, so every streak moves at
+            a distinct rate and they never resynchronize into a vertical wall.
+          * ``offset`` — a random starting position along the streak's period.
+          * ``period`` — the streak's own loop length (wake span plus a random
+            margin), decoupled per streak so wraps don't line up either.
+
+        Regenerated only when the wake width changes."""
+        if self._streaks is not None and self._streaks_span == span:
+            return self._streaks
+        rng = np.random.default_rng(0x5EED)   # fixed seed → stable across frames
+        streaks: list[tuple[int, float, float, int, float]] = []
+        for y in self.WIND_LANES:
+            if y >= band_h:
+                continue
+            for _ in range(self.WIND_PER_LANE):
+                speed = float(rng.uniform(self.WIND_SPEED_MIN, self.WIND_SPEED_MAX))
+                length = int(rng.integers(self.WIND_LEN_MIN, self.WIND_LEN_MAX + 1))
+                period = span + float(rng.uniform(4, 16))
+                offset = float(rng.uniform(0, period))
+                streaks.append((y, speed, offset, length, period))
+        self._streaks = streaks
+        self._streaks_span = span
+        return streaks
+
+    def _draw_wind(self, canvas: Canvas, wake_x0: int, band_h: int) -> None:
+        """Stream horizontal speed-streaks leftward through the wake region
+        [wake_x0, canvas width). Nothing is drawn over the letters (wake_x0
+        starts past them)."""
+        gw = canvas.gw
+        span = gw - wake_x0
+        if span <= 4:
+            return  # too narrow for a wake; skip the effect
+        for y, speed, offset, length, period in self._wind_streaks(span, band_h):
+            # Each streak slides left on its own period, so streaks with
+            # different speeds never realign.
+            x0 = wake_x0 + int((offset - self._phase * speed) % period)
+            xs = np.arange(x0, x0 + length)
+            ys = np.full_like(xs, y)
+            m = (xs >= wake_x0) & (xs < gw)
+            if m.any():
+                canvas.plot(xs[m], ys[m])
 
 
 class UpNext(Widget):

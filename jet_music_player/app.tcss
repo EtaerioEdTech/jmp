@@ -16,9 +16,9 @@ Screen {
     background: transparent;
 }
 
-/* Braille "JET" / "MUSIC IN YOUR TERMINAL" header above the browser.
-   5 dot-rows of glyphs (JET at scale 2 over the scale-1 subtitle) → ceil to
-   5 cells, plus a blank line of separation below. */
+/* Braille "JET" (with animated wind streaks) over "TERMINAL MUSIC PLAYER".
+   10-dot title band + 3-dot gap + 5-dot subtitle = 18 dots → 5 cells, plus a
+   blank line of separation below. */
 #browser-banner {
     width: 100%;
     height: 5;

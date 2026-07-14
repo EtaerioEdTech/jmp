@@ -48,7 +48,9 @@ class JetMusicPlayerApp(App):
         ("n", "next_track", "Next"),
         ("p", "prev_track", "Prev"),
         ("plus", "vol_up", "Vol +"),
+        ("equals_sign", "vol_up", "Vol +"),   # `=` so + works without Shift
         ("minus", "vol_down", "Vol -"),
+        ("underscore", "vol_down", "Vol -"),  # `_` alias for symmetry
         ("q", "quit", "Quit"),
     ]
 
@@ -217,8 +219,10 @@ class JetMusicPlayerApp(App):
     # ---- tick loop ----
 
     def _tick(self) -> None:
-        # Only the player pane needs updating; skip work while browsing.
+        # On the home view, keep the header's wind streaks animating; nothing
+        # else there needs per-frame updates.
         if not self.query_one("#player").display:
+            self.query_one("#browser-banner", BrowserBanner).tick()
             return
 
         viz = self.query_one("#visualizer", Visualizer)
@@ -266,7 +270,12 @@ class JetMusicPlayerApp(App):
             self._play_current()
 
     def action_vol_up(self) -> None:
-        self.engine.set_volume(self.engine.get_volume() + 0.05)
+        self._change_volume(+0.05)
 
     def action_vol_down(self) -> None:
-        self.engine.set_volume(self.engine.get_volume() - 0.05)
+        self._change_volume(-0.05)
+
+    def _change_volume(self, delta: float) -> None:
+        """Adjust volume and flash the volume meter over the visualizer for ~1s."""
+        self.engine.set_volume(self.engine.get_volume() + delta)
+        self.query_one("#visualizer", Visualizer).show_volume(self.engine.get_volume())
