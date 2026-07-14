@@ -24,36 +24,73 @@ ARTISTS                              ⣿⣿⣿  RADIOHEAD
 ↑↓ move  → open  s shuffle  d dir  q quit
 ```
 
-## Setup
+## Requirements
 
-Ubuntu / Debian:
+- **Python 3.9+.** Playback uses `pygame`, which ships prebuilt wheels only for
+  released Python versions — install into a Python that has a pygame wheel
+  (3.9–3.13 at time of writing), or `pip` will try to compile it from source and
+  need SDL development headers.
+- **ffmpeg** on your `PATH` — a system package, *not* a pip dependency. Without
+  it, MP3/OGG/FLAC/WAV still play, but **M4A and Opus won't play** and the
+  visualizer can't analyze compressed audio. The app warns at startup if it's
+  missing.
+
+Install ffmpeg (and, on Linux, the venv module):
 
 ```bash
+# Linux (Ubuntu / Debian)
 sudo apt install ffmpeg python3-venv
+# macOS
+brew install ffmpeg
+# Windows
+winget install ffmpeg
 ```
 
-Then, in the project directory:
+## Install
+
+The recommended way — installs a `tt` command on your `PATH`:
+
+```bash
+pip install .            # from a clone; or: pip install git+<repo-url>
+```
+
+Using [pipx](https://pipx.pypa.io/) keeps it in its own isolated environment:
+
+```bash
+pipx install .
+```
+
+Or, for development, a virtual environment against the raw sources:
 
 ```bash
 python3 -m venv .venv
-source .venv/bin/activate
+source .venv/bin/activate      # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
 ## Run
 
-Installed as a `ttunes` launcher on your `PATH`:
+Once installed, the `tt` command scans your library:
 
 ```bash
-ttunes                    # scans ~/Music
-ttunes /path/to/music     # scans a specific directory
+tt                        # scans ~/Music
+tt /path/to/music         # scans a specific directory
 ```
 
-Or directly from the project directory:
+Or run straight from a clone without installing:
 
 ```bash
-python run.py [/path/to/music]
+python -m music_player [/path/to/music]
+python run.py [/path/to/music]      # equivalent
 ```
+
+## Platform support
+
+Cross-platform — Linux, macOS, and Windows. The code uses `pathlib` throughout
+with no OS-specific paths, so the only per-platform differences are how you
+install ffmpeg (above) and the terminal you run in. Use a modern
+truecolor-capable terminal with mouse support (Windows Terminal, iTerm2, or any
+recent Linux emulator); the legacy Windows `cmd.exe` console renders poorly.
 
 ## Controls
 
@@ -102,11 +139,14 @@ the visualizer for any compressed format) require ffmpeg to be installed.
 
 ```
 terminaltunes/
-├── run.py                    # entry point
-├── requirements.txt
+├── pyproject.toml            # packaging + `tt` entry point
+├── run.py                    # convenience shim (delegates to music_player.cli)
+├── requirements.txt          # dev install of raw sources
 ├── README.md
 └── music_player/
     ├── __init__.py
+    ├── __main__.py           # enables `python -m music_player`
+    ├── cli.py                # entry point (`tt`)
     ├── app.py                # Textual app
     ├── app.tcss              # styling
     ├── audio.py              # pygame + FFT + waveform
