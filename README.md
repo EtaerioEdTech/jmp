@@ -94,7 +94,9 @@ python run.py [/path/to/music]
 
 ## Supported formats
 
-MP3, OGG, FLAC, WAV, M4A, Opus. Visualizer works for any format ffmpeg can decode.
+MP3, OGG, FLAC, WAV, M4A, Opus. MP3/OGG/FLAC/WAV play natively; **M4A and Opus
+are transcoded to a temporary WAV via ffmpeg on the fly**, so those formats (and
+the visualizer for any compressed format) require ffmpeg to be installed.
 
 ## Project layout
 
@@ -115,5 +117,6 @@ terminaltunes/
 
 ## Notes
 
-- FFmpeg is required for the visualizer to analyze MP3 files. Playback works without it.
+- ffmpeg is required to play M4A/Opus and for the visualizer to analyze any
+  compressed format. MP3/OGG/FLAC/WAV playback works without it.
 - The spectrogram is computed in a background thread, opening seconds first, so the visualizer starts in step with playback rather than catching up after the whole track is analyzed.

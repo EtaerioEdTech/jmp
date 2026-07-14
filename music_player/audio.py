@@ -1,6 +1,9 @@
 """Audio playback and spectrogram analysis.
 
 Playback: pygame.mixer.music (streams from disk, handles mp3/ogg/wav/flac).
+Formats SDL_mixer can't decode (m4a/aac, opus) are transcoded to a temporary
+WAV via ffmpeg first — otherwise SDL_mixer misroutes the unknown file to its
+tracker-module loader and raises "ModPlug_Load failed".
 Visualizer data: pydub decodes the file to samples, numpy computes a
 log-frequency spectrogram once per track. During playback we look up the
 current position in the spectrogram to get the bars for this instant.
@@ -9,6 +12,9 @@ current position in the spectrogram to get the bars for this instant.
 from __future__ import annotations
 
 import os
+import shutil
+import subprocess
+import tempfile
 import threading
 
 # Hide pygame's stdout banner before importing it. Textual would render it as garbage.
@@ -16,6 +22,21 @@ os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "1"
 
 import numpy as np
 import pygame
+
+
+# Extensions SDL_mixer can decode directly. Anything else needs ffmpeg to be
+# transcoded before playback (see AudioEngine._resolve_playable).
+NATIVE_EXTS = {".mp3", ".ogg", ".wav", ".flac"}
+
+
+def ffmpeg_available() -> bool:
+    """True if an `ffmpeg` binary is on PATH.
+
+    ffmpeg isn't a pip dependency — it's a system package. Without it,
+    non-native formats (m4a, opus) can't be played and the visualizer can't
+    analyze compressed audio. Callers use this to warn the user up front.
+    """
+    return shutil.which("ffmpeg") is not None
 
 
 class AudioEngine:
@@ -29,6 +50,7 @@ class AudioEngine:
     def __init__(self) -> None:
         pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=1024)
         self.current_path: str | None = None
+        self._temp_wav: str | None = None  # transcoded file to clean up, if any
         self.spectrogram: np.ndarray | None = None  # shape (frames, N_BARS)
         self.waveform: np.ndarray | None = None      # downsampled mono samples, [-1, 1]
         self.wave_rate: int = 0                       # samples/sec of `waveform`
@@ -41,8 +63,14 @@ class AudioEngine:
     # ---- playback control ----
 
     def play(self, path: str) -> None:
-        """Load and start playing a file."""
-        pygame.mixer.music.load(path)
+        """Load and start playing a file.
+
+        Transcodes formats SDL_mixer can't decode (m4a, opus, ...) to a temp
+        WAV first. Playback position and the visualizer both stay keyed to the
+        original file's timeline, since the transcode preserves duration.
+        """
+        playable = self._resolve_playable(path)
+        pygame.mixer.music.load(playable)
         pygame.mixer.music.play()
         self.current_path = path
         self.spectrogram = None
@@ -69,11 +97,58 @@ class AudioEngine:
 
     def stop(self) -> None:
         pygame.mixer.music.stop()
+        pygame.mixer.music.unload()
+        self._cleanup_temp()
         self.current_path = None
         self.spectrogram = None
         self.waveform = None
         self.wave_rate = 0
         self._paused = False
+
+    def _resolve_playable(self, path: str) -> str:
+        """Return a path SDL_mixer can load.
+
+        Natively supported formats pass through unchanged. Others are
+        transcoded to a temporary WAV via ffmpeg. Any temp file from a previous
+        track is removed here (we're about to load a new file, so the old one is
+        no longer streaming). If ffmpeg is unavailable or fails, falls back to
+        the original path so playback raises a clear error rather than silently
+        doing nothing.
+        """
+        # Release the previous file's handle and drop its temp WAV, if any.
+        pygame.mixer.music.unload()
+        self._cleanup_temp()
+
+        if os.path.splitext(path)[1].lower() in NATIVE_EXTS:
+            return path
+
+        fd, tmp = tempfile.mkstemp(suffix=".wav", prefix="tt-")
+        os.close(fd)
+        try:
+            subprocess.run(
+                ["ffmpeg", "-y", "-loglevel", "error", "-i", path, tmp],
+                check=True,
+                stdin=subprocess.DEVNULL,
+            )
+        except (OSError, subprocess.CalledProcessError):
+            # ffmpeg missing or failed — clean up and let SDL_mixer try the
+            # original (it will raise, surfacing the real problem).
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            return path
+        self._temp_wav = tmp
+        return tmp
+
+    def _cleanup_temp(self) -> None:
+        """Remove the transcoded temp WAV for the previous track, if any."""
+        if self._temp_wav is not None:
+            try:
+                os.remove(self._temp_wav)
+            except OSError:
+                pass
+            self._temp_wav = None
 
     def is_playing(self) -> bool:
         return pygame.mixer.music.get_busy() and not self._paused
