@@ -178,13 +178,23 @@ class AudioEngine:
     # ---- visualizer data ----
 
     def get_current_bars(self) -> np.ndarray | None:
-        """Return the current frequency bars (0..1) for the visualizer, or None."""
-        if self.spectrogram is None:
+        """Return the current frequency bars (0..1) for the visualizer, or None.
+
+        While only the fast head-slice spectrogram is available (pass 1), the
+        playback position can run past its end before the full spectrogram
+        (pass 2) lands. In that brief window we hold the last available frame
+        rather than returning None, so the visualizer keeps moving instead of
+        blanking out for a second at the ~head-length mark of every track.
+        """
+        spec = self.spectrogram
+        if spec is None or len(spec) == 0:
             return None
         frame_idx = int(self.get_pos_ms() / self.HOP_MS)
-        if 0 <= frame_idx < len(self.spectrogram):
-            return self.spectrogram[frame_idx]
-        return None
+        if frame_idx < 0:
+            return None
+        if frame_idx >= len(spec):
+            frame_idx = len(spec) - 1  # hold the last frame until more data lands
+        return spec[frame_idx]
 
     def get_current_wave(self, n: int = 512) -> np.ndarray | None:
         """Return ~`n` raw samples around the current playback position, in
@@ -260,24 +270,41 @@ class AudioEngine:
         window = np.hanning(win_samples).astype(np.float32)
         freqs = np.fft.rfftfreq(win_samples, d=1.0 / sample_rate)
 
-        # Precompute which FFT bins fall into each log-spaced band.
+        # Precompute a (n_bins × N_BARS) averaging matrix: each column averages
+        # the FFT bins that fall into one log-spaced band. One matmul then does
+        # all the band-averaging for a whole batch of frames at once.
         edges = np.logspace(
             np.log10(self.FREQ_MIN),
             np.log10(min(self.FREQ_MAX, sample_rate / 2)),
             self.N_BARS + 1,
         )
-        band_masks = [(freqs >= edges[i]) & (freqs < edges[i + 1]) for i in range(self.N_BARS)]
+        n_bins = len(freqs)
+        band_matrix = np.zeros((n_bins, self.N_BARS), dtype=np.float32)
+        for j in range(self.N_BARS):
+            mask = (freqs >= edges[j]) & (freqs < edges[j + 1])
+            count = int(mask.sum())
+            if count:
+                band_matrix[mask, j] = 1.0 / count
 
         n_frames = (len(samples) - win_samples) // hop_samples
-        spec = np.zeros((n_frames, self.N_BARS), dtype=np.float32)
+        if n_frames <= 0:
+            return
+        spec = np.empty((n_frames, self.N_BARS), dtype=np.float32)
 
-        for i in range(n_frames):
-            start = i * hop_samples
-            chunk = samples[start:start + win_samples] * window
-            magnitude = np.abs(np.fft.rfft(chunk))
-            for j, mask in enumerate(band_masks):
-                if mask.any():
-                    spec[i, j] = magnitude[mask].mean()
+        # Process frames in batches: build a (batch × win) matrix of windowed
+        # frames via stride indexing, one rfft over the batch, one matmul to
+        # band-average. Vectorized like this the whole track takes a fraction of
+        # a second instead of ~seconds of per-frame Python — so pass 2 lands
+        # before playback reaches the end of the fast head window and the
+        # visualizer never stalls. Batching caps the temporary matrix's memory.
+        frame_offsets = np.arange(win_samples)
+        BATCH = 1024
+        for base in range(0, n_frames, BATCH):
+            n = min(BATCH, n_frames - base)
+            starts = (np.arange(base, base + n) * hop_samples)[:, None]
+            frames = samples[starts + frame_offsets[None, :]] * window
+            magnitude = np.abs(np.fft.rfft(frames, axis=1))
+            spec[base:base + n] = magnitude @ band_matrix
 
         # Normalize per-segment so bars fill the display nicely.
         peak = spec.max()

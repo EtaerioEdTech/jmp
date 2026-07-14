@@ -39,11 +39,14 @@ Screen {
     height: 1;
 }
 
-/* "Up Next" footer line under the progress bar, right-aligned. */
+/* "Up Next" footer under the progress bar. Right-aligned when the line fits;
+   when the window is too narrow it marquees within this width (handled in the
+   UpNext widget). overflow:hidden keeps a stray cell from leaking on resize. */
 #upnext {
     height: 2;
     padding: 1 0 0 0;
     text-align: right;
+    overflow: hidden;
 }
 
 /* Footer reads as a hint line, not a status bar. */

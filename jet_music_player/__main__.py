@@ -1,4 +1,4 @@
-"""Enable `python -m music_player`."""
+"""Enable `python -m jet_music_player`."""
 
 from .cli import main
 

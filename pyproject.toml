@@ -3,9 +3,9 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "terminaltunes"
+name = "jet-music-player"
 version = "0.1.0"
-description = "An ASCII terminal music player with a live visualizer, built on Textual."
+description = "Jet Music Player — an ASCII terminal music player with a live visualizer, built on Textual."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
@@ -27,10 +27,10 @@ dependencies = [
 ]
 
 [project.scripts]
-tt = "music_player.cli:main"
+jmp = "jet_music_player.cli:main"
 
 [tool.setuptools]
-packages = ["music_player"]
+packages = ["jet_music_player"]
 
 [tool.setuptools.package-data]
-music_player = ["*.tcss"]
+jet_music_player = ["*.tcss"]

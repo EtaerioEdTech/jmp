@@ -32,12 +32,12 @@ from .library import Artist, Track, scan_library
 from .widgets import Banner, Browser, ProgressBar, UpNext, Visualizer
 
 
-class MusicPlayerApp(App):
-    """ASCII terminal music player."""
+class JetMusicPlayerApp(App):
+    """Jet Music Player — an ASCII terminal music player."""
 
     CSS_PATH = "app.tcss"
 
-    TITLE = "ASCII Music Player"
+    TITLE = "Jet Music Player"
 
     BINDINGS = [
         ("b", "browse", "Browse"),
@@ -222,6 +222,7 @@ class MusicPlayerApp(App):
         viz = self.query_one("#visualizer", Visualizer)
         viz.update_frame(self.engine.get_current_bars(), self.engine.get_current_wave())
         self.query_one("#banner", Banner).tick()
+        self.query_one("#upnext", UpNext).tick()
 
         if self.current_track:
             progress = self.query_one("#progress", ProgressBar)

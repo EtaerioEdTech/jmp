@@ -303,7 +303,7 @@ class Browser(Widget, can_focus=True):
 
         if self._empty:
             out.append("(no audio files found)\n", style="dim italic")
-            out.append("\nPass a music directory: ttunes /path/to/music\n", style="dim")
+            out.append("\nPass a music directory: jmp /path/to/music\n", style="dim")
             return out
 
         # Only render the slice of rows that fits, scrolling it with the cursor.
@@ -455,14 +455,29 @@ class UpNext(Widget):
     """A one-line "Up Next: <track> by <artist>" footer for the player.
 
     Shows what will play when the current track finishes. Blank when there's
-    nothing queued (no playlist / no next track)."""
+    nothing queued (no playlist / no next track).
+
+    The widget itself is the invisible fixed-width container: it spans the full
+    player width. When the line fits, it sits right-aligned in that width (the
+    tucked-into-the-corner look). When the window is too narrow for the whole
+    line, it marquees horizontally *within* the widget instead of being clipped,
+    so the queued track is always fully readable as it scrolls past.
+    """
+
+    SPEED = 0.5        # cells scrolled per frame when marqueeing
+    LOOP_SEP = "   ·   "  # gap joining the marquee's wrap, so the end of the
+                          # line is clear before it repeats
 
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
         self._title = ""
         self._artist = ""
+        self._scroll = 0.0
 
     def set_next(self, title: str, artist: str) -> None:
+        # Reset the scroll so a newly queued track starts from the right edge.
+        if title != self._title or artist != self._artist:
+            self._scroll = 0.0
         self._title = title or ""
         self._artist = artist or ""
         self.refresh()
@@ -470,13 +485,19 @@ class UpNext(Widget):
     def clear(self) -> None:
         self._title = ""
         self._artist = ""
+        self._scroll = 0.0
         self.refresh()
 
-    def render(self) -> Text:
+    def tick(self) -> None:
+        """Advance the marquee scroll; called each frame by the app. Only does
+        anything when the line is actually too wide to fit (see render)."""
         if not self._title:
-            return Text("")
-        # Right-aligned (see #upnext `text-align: right` in app.tcss), tucked
-        # into the bottom-right corner of the window.
+            return
+        self._scroll += self.SPEED
+        self.refresh()
+
+    def _content(self) -> Text:
+        """The full "Up Next: … by …" line, unclipped."""
         out = Text()
         out.append("Up Next: ", style="dim bold")
         out.append(self._title, style="dim")
@@ -484,6 +505,37 @@ class UpNext(Widget):
             out.append(" by ", style="dim")
             out.append(self._artist, style="dim")
         return out
+
+    def render(self) -> Text:
+        if not self._title:
+            return Text("")
+
+        width = self.size.width
+        content = self._content()
+        text_w = content.cell_len
+
+        # Fits: right-align in the widget width (the original tucked-in look).
+        # Also covers the pre-layout frame where width is still 0.
+        if width <= 0 or text_w <= width:
+            self._scroll = 0.0
+            return content
+
+        # Too wide: marquee within the widget width. Build one loop period
+        # (line + separator), then slice a `width`-wide window that slides left,
+        # tiling copies so the wrap-around is seamless.
+        loop = content.copy()
+        loop.append(self.LOOP_SEP, style="dim")
+        period = loop.cell_len
+
+        tiled = Text()
+        # Enough copies to always cover a full window plus the sliding offset.
+        copies = width // period + 2
+        for _ in range(copies):
+            tiled.append_text(loop)
+
+        off = int(self._scroll) % period
+        window = tiled[off:off + width]
+        return window
 
 
 class ProgressBar(Widget):

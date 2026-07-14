@@ -1,6 +1,6 @@
-# ASCII Music Player
+# Jet Music Player
 
-A terminal music player rendered in **Braille glyphs** for a fine, high-res,
+**Jet Music Player** (`jmp`) is a terminal music player rendered in **Braille glyphs** for a fine, high-res,
 futuristic look — a pure-text, SSH-menu-style library browser and a real-time
 Braille visualizer with several switchable modes. Everything is monochrome
 (brightness only), so it stays fully transparent and the terminal shows through.
@@ -48,7 +48,7 @@ winget install ffmpeg
 
 ## Install
 
-The recommended way — installs a `tt` command on your `PATH`:
+The recommended way — installs a `jmp` command on your `PATH`:
 
 ```bash
 pip install .            # from a clone; or: pip install git+<repo-url>
@@ -70,18 +70,19 @@ pip install -r requirements.txt
 
 ## Run
 
-Once installed, the `tt` command scans your library:
+Once installed, just type `jmp` in any terminal to scan your library and launch
+the player:
 
 ```bash
-tt                        # scans ~/Music
-tt /path/to/music         # scans a specific directory
+jmp                        # scans ~/Music
+jmp /path/to/music         # scans a specific directory
 ```
 
 Or run straight from a clone without installing:
 
 ```bash
-python -m music_player [/path/to/music]
-python run.py [/path/to/music]      # equivalent
+python -m jet_music_player [/path/to/music]
+python run.py [/path/to/music]              # equivalent
 ```
 
 ## Platform support
@@ -120,7 +121,7 @@ recent Linux emulator); the legacy Windows `cmd.exe` console renders poorly.
 
 ## How it works
 
-- **Library scan** (`library.py`): walks the music directory, reads ID3 / Vorbis / FLAC tags with `mutagen`, groups tracks into Artist → Album → Track. Per-file tag results are cached under `~/.cache/terminaltunes`, keyed by path + mtime + size, so relaunching only re-reads new or changed files — startup stays fast as the library grows. The scan runs on a background thread after the UI mounts (a "Scanning…" placeholder shows meanwhile), so a large collection never blocks the app from appearing.
+- **Library scan** (`library.py`): walks the music directory, reads ID3 / Vorbis / FLAC tags with `mutagen`, groups tracks into Artist → Album → Track. Per-file tag results are cached under `~/.cache/jet-music-player`, keyed by path + mtime + size, so relaunching only re-reads new or changed files — startup stays fast as the library grows. The scan runs on a background thread after the UI mounts (a "Scanning…" placeholder shows meanwhile), so a large collection never blocks the app from appearing.
 - **Browser** (`widgets.py`): a pure-text `Browser` widget renders a single-column list per level with a Braille `⣿` cursor and a Braille rule under the heading — no tree widget, no boxes. The row list is windowed to the widget height and scrolls with the cursor (with `⋯` cues when rows are hidden above/below), so long artist lists page instead of running off-screen. → drills Artists → Albums → Tracks; ← goes back up. Picking a track posts a message to the app.
 - **Modes** (`app.py`): the browser and player are two full-screen views toggled by `display`; only the active one is shown. Choosing a track hides the browser and shows the player; `b` returns to the browser. Escape is a universal back button that loops between the views: from the player it goes to the browser, and inside the browser it pops one drill-down level (Tracks → Albums → Artists) before crossing over to the player. When nothing is playing, the player's banner shows a scrolling **WAITING FOR TRACK** until a song is picked. Pressing `s` in the browser shuffles the highlighted folder (an artist's whole catalogue, or a single album) into a playlist; a **Shuffle All** row at the top of the artist list shuffles the whole library. `d` re-scans a new music directory in place. Playback loops the current playlist — the last track advances back to the first.
 - **Banner** (`widgets.py`): the player's title is two stacked lines — the artist big, the track name half-size below it — rendered in a Braille bitmap font (`braille.py`). Each line is centered when it fits and scrolls as a marquee when it's wider than the screen.
@@ -138,15 +139,15 @@ the visualizer for any compressed format) require ffmpeg to be installed.
 ## Project layout
 
 ```
-terminaltunes/
-├── pyproject.toml            # packaging + `tt` entry point
-├── run.py                    # convenience shim (delegates to music_player.cli)
+jet-music-player/
+├── pyproject.toml            # packaging + `jmp` entry point
+├── run.py                    # convenience shim (delegates to jet_music_player.cli)
 ├── requirements.txt          # dev install of raw sources
 ├── README.md
-└── music_player/
+└── jet_music_player/
     ├── __init__.py
-    ├── __main__.py           # enables `python -m music_player`
-    ├── cli.py                # entry point (`tt`)
+    ├── __main__.py           # enables `python -m jet_music_player`
+    ├── cli.py                # entry point (`jmp`)
     ├── app.py                # Textual app
     ├── app.tcss              # styling
     ├── audio.py              # pygame + FFT + waveform

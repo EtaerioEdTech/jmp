@@ -185,7 +185,7 @@ def _cache_path(root: Path) -> Path:
     """A per-root cache file under the user cache dir. The root path is hashed
     so different libraries get distinct cache files."""
     digest = hashlib.sha1(str(root.resolve()).encode("utf-8")).hexdigest()[:16]
-    base = Path.home() / ".cache" / "terminaltunes"
+    base = Path.home() / ".cache" / "jet-music-player"
     return base / f"scan-{digest}.json"
 
 
