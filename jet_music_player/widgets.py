@@ -451,6 +451,34 @@ class Visualizer(Widget):
             canvas.buf[max(0, top):min(canvas.gh, bot + 1), c] += 1.0
 
 
+class BrowserBanner(Widget):
+    """The static Braille header shown above the file browser on the home page.
+
+    Two left-aligned lines in the same Braille bitmap font as the player banner:
+    a big "JET" (scale 2) with "MUSIC IN YOUR TERMINAL" (scale 1) beneath it.
+    Purely decorative and unchanging — no scrolling, no state.
+    """
+
+    TITLE = "JET"
+    TITLE_SCALE = 2
+    SUBTITLE = "MUSIC IN YOUR TERMINAL"
+    SUBTITLE_SCALE = 1
+    LINE_GAP = 3   # dot-rows between the two lines
+
+    def render(self) -> Text:
+        width = self.size.width
+        height = self.size.height
+        if width <= 0 or height <= 0:
+            return Text("")
+
+        canvas = Canvas(width, height)
+        # Left-aligned: both lines start at the left edge (dot x = 0).
+        draw_text(canvas, self.TITLE, 0, 0, self.TITLE_SCALE)
+        y1 = text_height_dots(self.TITLE_SCALE) + self.LINE_GAP
+        draw_text(canvas, self.SUBTITLE, 0, y1, self.SUBTITLE_SCALE)
+        return _canvas_to_text(canvas)
+
+
 class UpNext(Widget):
     """A one-line "Up Next: <track> by <artist>" footer for the player.
 

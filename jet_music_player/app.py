@@ -29,7 +29,7 @@ from textual.widgets import Footer
 from .audio import AudioEngine
 from .dirprompt import DirPrompt
 from .library import Artist, Track, scan_library
-from .widgets import Banner, Browser, ProgressBar, UpNext, Visualizer
+from .widgets import Banner, Browser, BrowserBanner, ProgressBar, UpNext, Visualizer
 
 
 class JetMusicPlayerApp(App):
@@ -67,7 +67,9 @@ class JetMusicPlayerApp(App):
     # ---- Textual lifecycle ----
 
     def compose(self) -> ComposeResult:
-        yield Browser(self.library, id="browser")
+        with Vertical(id="home"):
+            yield BrowserBanner(id="browser-banner")
+            yield Browser(self.library, id="browser")
         with Vertical(id="player"):
             yield Banner(id="banner")
             yield Visualizer(id="visualizer")
@@ -102,12 +104,12 @@ class JetMusicPlayerApp(App):
 
     def _show_browser(self) -> None:
         self.query_one("#player").display = False
-        browser = self.query_one("#browser", Browser)
-        browser.display = True
-        browser.focus()
+        # #home wraps the Braille header and the browser; toggle it as one view.
+        self.query_one("#home").display = True
+        self.query_one("#browser", Browser).focus()
 
     def _show_player(self) -> None:
-        self.query_one("#browser").display = False
+        self.query_one("#home").display = False
         self.query_one("#player").display = True
 
     def action_browse(self) -> None:

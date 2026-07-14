@@ -7,11 +7,29 @@ Screen {
     background: transparent;
 }
 
-/* Pure-text library browser, full screen. */
-#browser {
+/* Home view: the Braille header stacked above the file browser, full screen.
+   Padding lives here so the banner and browser share one left edge. */
+#home {
     width: 100%;
     height: 1fr;
     padding: 1 2;
+    background: transparent;
+}
+
+/* Braille "JET" / "MUSIC IN YOUR TERMINAL" header above the browser.
+   5 dot-rows of glyphs (JET at scale 2 over the scale-1 subtitle) → ceil to
+   5 cells, plus a blank line of separation below. */
+#browser-banner {
+    width: 100%;
+    height: 5;
+    margin: 0 0 1 0;
+    background: transparent;
+}
+
+/* Pure-text library browser, fills the rest of the home view. */
+#browser {
+    width: 100%;
+    height: 1fr;
     background: transparent;
 }
 
