@@ -6,8 +6,11 @@ Braille visualizer with several switchable modes. Everything is monochrome
 (brightness only), so it stays fully transparent and the terminal shows through.
 
 Two full-screen modes, shown one at a time. Browse the library with the arrow
-keys; pick a track and the browser gives way to the player. Press `b` (or
-Escape) to go back and pick another; press `v` to cycle the visualizer.
+keys; pick a track and the browser gives way to the player. Press `b` to go back
+and pick another; press `v` to cycle the visualizer. Escape is a universal back
+button that loops between the views — from the player it returns to the browser,
+and inside the browser it walks back up (Tracks → Albums → Artists) before
+crossing back over to the player.
 
 ```
 BROWSER                            PLAYER
@@ -61,6 +64,7 @@ python run.py [/path/to/music]
 | ↑ / ↓         | Move up / down the list             |
 | →             | Advance — drill in / play the track |
 | ← / Backspace | Retreat — back up a level           |
+| Escape        | Universal back — up a level, then over to the player (Tracks → Albums → Artists → Player) |
 | `s`           | Shuffle the highlighted folder (all of an artist's songs, or an album). On the **Shuffle All** row at the top of the artist list, shuffles the whole library |
 | `d`           | Change the music directory (type a new root path) |
 
@@ -68,7 +72,8 @@ python run.py [/path/to/music]
 
 | Key           | Action                                        |
 |---------------|-----------------------------------------------|
-| `b` / Escape  | Back to the browser                           |
+| `b`           | Back to the browser                           |
+| Escape        | Universal back — from the player, returns to the browser |
 | `v`           | Cycle visualizer (spectrum bars / mirror) |
 | Space         | Pause / resume                                |
 | `n`           | Next track                                    |
@@ -78,10 +83,11 @@ python run.py [/path/to/music]
 
 ## How it works
 
-- **Library scan** (`library.py`): walks the music directory, reads ID3 / Vorbis / FLAC tags with `mutagen`, groups tracks into Artist → Album → Track.
-- **Browser** (`widgets.py`): a pure-text `Browser` widget renders a single-column list per level with a Braille `⣿` cursor and a Braille rule under the heading — no tree widget, no boxes. → drills Artists → Albums → Tracks; ← goes back up. Picking a track posts a message to the app.
-- **Modes** (`app.py`): the browser and player are two full-screen views toggled by `display`; only the active one is shown. Choosing a track hides the browser and shows the player; `b`/Escape returns. Pressing `s` in the browser shuffles the highlighted folder (an artist's whole catalogue, or a single album) into a playlist; a **Shuffle All** row at the top of the artist list shuffles the whole library. `d` re-scans a new music directory in place.
+- **Library scan** (`library.py`): walks the music directory, reads ID3 / Vorbis / FLAC tags with `mutagen`, groups tracks into Artist → Album → Track. Per-file tag results are cached under `~/.cache/terminaltunes`, keyed by path + mtime + size, so relaunching only re-reads new or changed files — startup stays fast as the library grows. The scan runs on a background thread after the UI mounts (a "Scanning…" placeholder shows meanwhile), so a large collection never blocks the app from appearing.
+- **Browser** (`widgets.py`): a pure-text `Browser` widget renders a single-column list per level with a Braille `⣿` cursor and a Braille rule under the heading — no tree widget, no boxes. The row list is windowed to the widget height and scrolls with the cursor (with `⋯` cues when rows are hidden above/below), so long artist lists page instead of running off-screen. → drills Artists → Albums → Tracks; ← goes back up. Picking a track posts a message to the app.
+- **Modes** (`app.py`): the browser and player are two full-screen views toggled by `display`; only the active one is shown. Choosing a track hides the browser and shows the player; `b` returns to the browser. Escape is a universal back button that loops between the views: from the player it goes to the browser, and inside the browser it pops one drill-down level (Tracks → Albums → Artists) before crossing over to the player. When nothing is playing, the player's banner shows a scrolling **WAITING FOR TRACK** until a song is picked. Pressing `s` in the browser shuffles the highlighted folder (an artist's whole catalogue, or a single album) into a playlist; a **Shuffle All** row at the top of the artist list shuffles the whole library. `d` re-scans a new music directory in place. Playback loops the current playlist — the last track advances back to the first.
 - **Banner** (`widgets.py`): the player's title is two stacked lines — the artist big, the track name half-size below it — rendered in a Braille bitmap font (`braille.py`). Each line is centered when it fits and scrolls as a marquee when it's wider than the screen.
+- **Up Next** (`widgets.py`): a one-line `Up Next: <track> by <artist>` footer under the progress bar, right-aligned to the bottom-right corner, shows what plays when the current track finishes, looping to the first track at the end of the playlist.
 - **Braille rendering** (`braille.py`): a small `Canvas` rasterizes points/lines/bars into a 2×4-dots-per-cell sub-pixel grid (8× resolution) and packs each block into one Braille glyph, fully vectorized in NumPy. The visualizer, progress bar, browser cursor and play icons all use it, so the whole UI reads as one fine, futuristic, monochrome (transparent) system.
 - **Playback** (`audio.py`): `pygame.mixer.music` streams the file from disk.
 - **Visualizer**: on load, `pydub` decodes the file to raw samples and NumPy computes a windowed FFT every 50 ms into 32 log-spaced frequency bands (~40 Hz to 16 kHz). Analysis runs in a background thread in two passes — the opening seconds first, so the visualizer starts in step with playback — and the widget indexes into the spectrogram by `get_pos_ms()`. Press `v` to switch between two modes: **spectrum** (32-band frequency bars) and **mirror** (the spectrum reflected above and below a center line). Both are Braille-rendered and hold 30 fps, scaling their resolution to the terminal size.

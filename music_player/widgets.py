@@ -65,13 +65,21 @@ class Browser(Widget, can_focus=True):
         self._album_name = ""
         self._rows: list[str] = []
         self._empty = not library
+        # True while the library is still being scanned in the background; shows
+        # a "Scanning…" placeholder instead of the empty-library message.
+        self._scanning = False
         self._rebuild_rows()
+
+    def set_scanning(self, scanning: bool) -> None:
+        self._scanning = scanning
+        self.refresh()
 
     # ---- data ----
 
     def set_library(self, library: dict[str, Artist]) -> None:
         self._library = library
         self._empty = not library
+        self._scanning = False
         self._level = self.ARTISTS
         self._cursor = 0
         self._rebuild_rows()
@@ -215,7 +223,10 @@ class Browser(Widget, can_focus=True):
                 self.TrackChosen(track, list(tracks), self._artist_name, self._album_name)
             )
 
-    def _back(self) -> None:
+    def _back(self) -> bool:
+        """Go back up one drill-down level. Returns True if a level was popped,
+        False if already at the top (ARTISTS) — the caller uses that to decide
+        whether Escape should instead cross over to the player view."""
         if self._level == self.TRACKS:
             self._level = self.ALBUMS
             # Restore cursor to the album we came from.
@@ -223,6 +234,7 @@ class Browser(Widget, can_focus=True):
             self._cursor = albums.index(self._album_name) if self._album_name in albums else 0
             self._rebuild_rows()
             self.refresh()
+            return True
         elif self._level == self.ALBUMS:
             self._level = self.ARTISTS
             artists = self._artists_sorted()
@@ -231,7 +243,14 @@ class Browser(Widget, can_focus=True):
             self._cursor = artists.index(self._artist_name) + 1 if self._artist_name in artists else 1
             self._rebuild_rows()
             self.refresh()
-        # At ARTISTS level, back does nothing.
+            return True
+        # At ARTISTS level, back does nothing here.
+        return False
+
+    def back_up_level(self) -> bool:
+        """Public entry for the app's Escape handler: pop one browser level.
+        Returns False when already at the top level (ARTISTS)."""
+        return self._back()
 
     # ---- render ----
 
@@ -247,6 +266,26 @@ class Browser(Widget, can_focus=True):
             return "↑↓ move   → open   s shuffle   d dir   q quit"
         return "↑↓ move   → open   ← back   s shuffle   d dir"
 
+    # Fixed chrome around the scrolling row window: heading + rule + blank line
+    # above, blank line + hint below.
+    _HEADER_LINES = 3
+    _FOOTER_LINES = 2
+
+    def _visible_window(self, capacity: int) -> tuple[int, int]:
+        """The [start, end) slice of `self._rows` to show so the cursor stays
+        on screen, given how many rows fit (`capacity`). Scrolls only when the
+        cursor would otherwise fall outside the window."""
+        n = len(self._rows)
+        if capacity <= 0:
+            return 0, 0
+        if capacity >= n:
+            return 0, n
+        # Center the cursor in the window where possible, then clamp to the ends
+        # so we never scroll past the first or last row.
+        start = self._cursor - capacity // 2
+        start = max(0, min(start, n - capacity))
+        return start, start + capacity
+
     def render(self) -> Text:
         width = self.size.width
         out = Text()
@@ -258,18 +297,40 @@ class Browser(Widget, can_focus=True):
         out.append(chr(0x28FF) * rule_w + "\n", style="dim")
         out.append("\n")
 
+        if self._scanning:
+            out.append("⣷ Scanning your music library…\n", style="dim italic")
+            return out
+
         if self._empty:
             out.append("(no audio files found)\n", style="dim italic")
             out.append("\nPass a music directory: ttunes /path/to/music\n", style="dim")
             return out
 
-        for i, row in enumerate(self._rows):
+        # Only render the slice of rows that fits, scrolling it with the cursor.
+        # A plain widget's render output is clipped (never scrolled) by Textual,
+        # so without this a long list would run off the bottom of the screen.
+        # Reserve one line each for the "⋯" more-above / more-below cues so the
+        # window that actually holds rows still guarantees the cursor is shown.
+        capacity = self.size.height - self._HEADER_LINES - self._FOOTER_LINES
+        rows_capacity = capacity - 2 if capacity < len(self._rows) else capacity
+        start, end = self._visible_window(rows_capacity)
+
+        # A dim "⋯ more above" / "⋯ more below" cue when the list is clipped,
+        # so it's clear the window is scrolled rather than truncated.
+        if start > 0:
+            out.append("  ⋯\n", style="dim")
+
+        for i in range(start, end):
+            row = self._rows[i]
             selected = i == self._cursor
             # Selection is marked by a Braille cursor + bold text — no background
             # fill, so the terminal shows through everywhere.
             marker = "⣿ " if selected else "  "
             style = "bold" if selected else "dim"
             out.append(f"{marker}{row}\n", style=style)
+
+        if end < len(self._rows):
+            out.append("  ⋯\n", style="dim")
 
         out.append("\n")
         out.append(self._hint(), style="dim")
@@ -390,6 +451,41 @@ class Visualizer(Widget):
             canvas.buf[max(0, top):min(canvas.gh, bot + 1), c] += 1.0
 
 
+class UpNext(Widget):
+    """A one-line "Up Next: <track> by <artist>" footer for the player.
+
+    Shows what will play when the current track finishes. Blank when there's
+    nothing queued (no playlist / no next track)."""
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._title = ""
+        self._artist = ""
+
+    def set_next(self, title: str, artist: str) -> None:
+        self._title = title or ""
+        self._artist = artist or ""
+        self.refresh()
+
+    def clear(self) -> None:
+        self._title = ""
+        self._artist = ""
+        self.refresh()
+
+    def render(self) -> Text:
+        if not self._title:
+            return Text("")
+        # Right-aligned (see #upnext `text-align: right` in app.tcss), tucked
+        # into the bottom-right corner of the window.
+        out = Text()
+        out.append("Up Next: ", style="dim bold")
+        out.append(self._title, style="dim")
+        if self._artist:
+            out.append(" by ", style="dim")
+            out.append(self._artist, style="dim")
+        return out
+
+
 class ProgressBar(Widget):
     """A one-line progress bar with elapsed / total time labels."""
 
@@ -450,6 +546,9 @@ class Banner(Widget):
                        # of a scrolling title is clear before it repeats
     LINE_GAP = 4       # dot-rows of vertical padding between artist and track
 
+    # Shown as the (scrolling) artist line when nothing is playing yet.
+    WAITING_ARTIST = "WAITING FOR TRACK"
+
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
         self._artist = ""       # top line
@@ -478,10 +577,19 @@ class Banner(Widget):
         height = self.size.height
         if width <= 0 or height <= 0:
             return Text("")
-        if not self._artist and not self._track:
-            return Text("⠶  no track loaded", style="dim italic")
 
         canvas = Canvas(width, height)
+
+        # Nothing playing yet: show "WAITING FOR TRACK" as a single scrolling
+        # artist line (no track line beneath), and always marquee it.
+        if not self._artist and not self._track:
+            artist_h = text_height_dots(self.ARTIST_SCALE)
+            y0 = max(0, (canvas.gh - artist_h) // 2)
+            self._draw_line(
+                canvas, self.WAITING_ARTIST, self.ARTIST_SCALE, y0,
+                direction=1, force_scroll=True,
+            )
+            return _canvas_to_text(canvas)
 
         # Stack the two lines vertically: big artist, small track beneath, with
         # LINE_GAP dot-rows of padding. Center the block in the available rows.
@@ -499,22 +607,34 @@ class Banner(Widget):
 
         return _canvas_to_text(canvas)
 
-    def _draw_line(self, canvas: Canvas, text: str, scale: int, y0: int, direction: int = -1) -> None:
+    def _draw_line(
+        self, canvas: Canvas, text: str, scale: int, y0: int,
+        direction: int = -1, force_scroll: bool = False,
+    ) -> None:
         """Draw one line: centered if it fits the width, else marqueed.
 
         `direction` sets the scroll sense: -1 slides left, +1 slides right.
+        `force_scroll` marquees even when the text would fit (used for the
+        "WAITING FOR TRACK" placeholder, which should always be in motion).
         """
         text_w = text_width_dots(text, scale)
-        if text_w <= canvas.gw:
+        if text_w <= canvas.gw and not force_scroll:
             x0 = (canvas.gw - text_w) // 2
             draw_text(canvas, text, x0, y0, scale)
             return
-        # Too wide → marquee. Repeat the line + a wrap gap so the loop is even.
+        # Marquee: repeat the line + a wrap gap so the loop is even, then tile
+        # enough copies to cover the full width (the loop can be narrower than
+        # the canvas when force_scroll is set, so two copies may not be enough).
         loop = text + self.LOOP_SEP
         period = text_width_dots(loop, scale)
         off = (direction * int(self._scroll)) % period
-        draw_text(canvas, loop, -off, y0, scale)
-        draw_text(canvas, loop, -off + period, y0, scale)
+        x = -off
+        # +2 copies of headroom so both the leading (possibly negative) and
+        # trailing edges are always drawn past the canvas bounds.
+        copies = canvas.gw // period + 2
+        for _ in range(copies):
+            draw_text(canvas, loop, x, y0, scale)
+            x += period
 
 
 _STYLES = ("dim", "default", "bold")
