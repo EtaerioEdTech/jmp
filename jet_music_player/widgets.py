@@ -575,12 +575,14 @@ class Visualizer(Widget):
     Modes (cycle with the `v` key):
         - "bars"     : 32-band frequency spectrum as vertical bars
         - "mirror"   : spectrum mirrored above/below a center line
+        - "radial"   : spectrum swept around a circle — a pulsing bloom/iris
     """
 
-    MODES = ("bars", "mirror")
+    MODES = ("bars", "mirror", "radial")
     MODE_LABELS = {
         "bars": "SPECTRUM",
         "mirror": "MIRROR",
+        "radial": "RADIAL BLOOM",
     }
 
     DECAY = 0.80  # spectrum smoothing between frames: fast attack, slow release
@@ -596,6 +598,7 @@ class Visualizer(Widget):
         self._vol_frames = 0        # ticks remaining to show the volume meter
         self._vol_value = 0.0       # volume (0..1) to display
         self._vol_anim = 0.0        # animation phase for the meter's flair
+        self._radial_phase = 0.0    # slow rotation of the radial-bloom ring
 
     @property
     def mode(self) -> str:
@@ -634,6 +637,8 @@ class Visualizer(Widget):
         if self._vol_frames > 0:
             self._vol_frames -= 1
             self._vol_anim += 1.0
+        # Slowly rotate the radial bloom so it feels alive even between beats.
+        self._radial_phase += 0.02
         self.refresh()
 
     # ---- rendering ----
@@ -649,8 +654,10 @@ class Visualizer(Widget):
             self._draw_volume(canvas)
         elif self.mode == "bars":
             self._draw_bars(canvas)
-        else:
+        elif self.mode == "mirror":
             self._draw_mirror(canvas)
+        else:  # radial
+            self._draw_radial(canvas)
 
         return self._emit(canvas)
 
@@ -766,6 +773,80 @@ class Visualizer(Widget):
             top = int(mid - r)
             bot = int(mid + r)
             canvas.buf[max(0, top):min(canvas.gh, bot + 1), c] += 1.0
+
+    def _draw_radial(self, canvas: Canvas) -> None:
+        """The 32-band spectrum swept around a circle: a pulsing bloom/iris.
+
+        Each band becomes a radial spoke from an inner ring outward, band 0
+        (bass) at the top and frequencies increasing clockwise. The 32 bands are
+        interpolated up to many angular spokes so the ring reads as a smooth
+        bloom rather than 32 separate spikes. Overall loudness scales the whole
+        reach, so loud passages bloom outward; a slow rotation (`_radial_phase`)
+        keeps it alive between beats, and a faint inner ring holds the shape
+        during silence.
+        """
+        bars = self._smoothed
+        if bars is None:
+            self._draw_flatline(canvas)
+            return
+
+        gw, gh = canvas.gw, canvas.gh
+        cx = (gw - 1) / 2.0
+        cy = (gh - 1) / 2.0
+
+        # Fill the frame: the visualizer area is much wider than tall, so the
+        # bloom is an ellipse fitted to the actual half-extents (cx wide, cy
+        # tall) rather than a small circle limited by height. `radius` below is
+        # a normalized 0..1 reach that's scaled onto x by cx and onto y by cy,
+        # so at full amplitude spokes reach right to the frame edge.
+        inner_frac = 0.34               # resting-ring radius (fraction of edge)
+        reach_frac = 0.66               # extra radius at full amplitude
+        r_unit = max(cx, cy)            # only used to pick angular resolution
+
+        # Angular resolution: enough spokes to make a continuous ring at this
+        # size, but capped so the per-frame work stays light.
+        n_spokes = int(np.clip(r_unit * 2.5, 96, 640))
+
+        # Interpolate the 32 bands around the full circle. Sampling positions map
+        # spoke -> band; wrap so band 31 blends smoothly back to band 0.
+        band_pos = np.linspace(0.0, len(bars), n_spokes, endpoint=False)
+        lo = np.floor(band_pos).astype(int)
+        frac = band_pos - lo
+        amp = (bars[lo % len(bars)] * (1 - frac)
+               + bars[(lo + 1) % len(bars)] * frac)
+        amp = np.clip(amp, 0.0, 1.0)
+
+        # Overall loudness gives the whole ring a "breath" — louder = bigger. A
+        # high resting floor keeps the bloom large even at moderate loudness.
+        energy = float(np.clip(bars.mean() * 1.8, 0.0, 1.0))
+        radius = inner_frac + amp * reach_frac * (0.7 + 0.3 * energy)  # 0..1 reach
+
+        # Angle per spoke: 0 at the top (−90°), increasing clockwise. Add the
+        # slow rotation phase so the bloom turns over time.
+        theta = -np.pi / 2 + self._radial_phase + np.arange(n_spokes) * (2 * np.pi / n_spokes)
+        cos_t = np.cos(theta)
+        sin_t = np.sin(theta)
+
+        # Draw each spoke as a radial run of dots from the inner ring outward,
+        # scaling the normalized radius onto the elliptical frame (cx × cy).
+        # Oversample along the radius so the stroke is continuous.
+        steps = max(6, int(max(cx, cy)))
+        t = np.linspace(inner_frac, 1.0, steps)[None, :]  # normalized 0..1 reach
+        # frac_r: (n_spokes, steps) from the inner ring out to each spoke's reach.
+        frac_r = inner_frac + (radius - inner_frac)[:, None] * (
+            (t - inner_frac) / max(1e-6, 1.0 - inner_frac)
+        )
+        xs = cx + frac_r * cx * cos_t[:, None]
+        ys = cy + frac_r * cy * sin_t[:, None]
+        canvas.plot(xs.ravel(), ys.ravel())
+
+        # Brighten the resting inner ring and each spoke's tip so the shape holds
+        # even when the music is quiet. Both are scaled onto the same ellipse.
+        canvas.plot(cx + inner_frac * cx * cos_t, cy + inner_frac * cy * sin_t)
+        tip_x = cx + radius * cx * cos_t
+        tip_y = cy + radius * cy * sin_t
+        canvas.plot(tip_x, tip_y)
+        canvas.plot(tip_x, tip_y)
 
 
 class BrowserBanner(Widget):
