@@ -14,11 +14,14 @@ Two full-screen modes, toggled — never both at once:
     +-------------------------+      +-------------------------+
 
 Picking a track in the browser hides it and shows only the player.
-Pressing `b` returns to the browser to pick another track.
+Pressing `b` returns to the browser to pick another track; pressed again while
+already in the browser, `b` flips its structure between the tag-based Artists
+view and a pure Folders view (see `Browser.toggle_view_mode`).
 """
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 from textual import work
@@ -28,7 +31,7 @@ from textual.widgets import Footer
 
 from .audio import AudioEngine
 from .dirprompt import DirPrompt
-from .library import Artist, Track, scan_library
+from .library import Artist, FolderNode, Track, build_folder_tree, scan_library
 from .widgets import Banner, Browser, BrowserBanner, ProgressBar, UpNext, Visualizer
 
 
@@ -40,17 +43,19 @@ class JetMusicPlayerApp(App):
     TITLE = "Jet Music Player"
 
     BINDINGS = [
-        ("b", "browse", "Browse"),
+        # `b`'s label is updated dynamically to name the view it will switch to
+        # (Browse Folders / Browse Artists); see _sync_browse_label.
+        ("b", "browse", "Browse Folders"),
         ("escape", "back", "Back"),
-        ("d", "change_dir", "Dir"),
+        ("d", "change_dir", "Change Directory"),
         ("space", "toggle_play", "Play / Pause"),
-        ("v", "cycle_viz", "Visual"),
-        ("n", "next_track", "Next"),
-        ("p", "prev_track", "Prev"),
-        ("plus", "vol_up", "Vol +"),
-        ("equals_sign", "vol_up", "Vol +"),   # `=` so + works without Shift
-        ("minus", "vol_down", "Vol -"),
-        ("underscore", "vol_down", "Vol -"),  # `_` alias for symmetry
+        ("v", "cycle_viz", "Change Visualizer"),
+        ("n", "next_track", "Next Track"),
+        ("p", "prev_track", "Previous Track"),
+        ("plus", "vol_up", "Volume Up"),
+        ("equals_sign", "vol_up", "Volume Up"),   # `=` so + works without Shift
+        ("minus", "vol_down", "Volume Down"),
+        ("underscore", "vol_down", "Volume Down"),  # `_` alias for symmetry
         ("q", "quit", "Quit"),
     ]
 
@@ -61,6 +66,8 @@ class JetMusicPlayerApp(App):
         # The library is scanned in the background after mount (see _start_scan)
         # so a large collection doesn't block the UI from appearing. Start empty.
         self.library: dict[str, Artist] = {}
+        # The on-disk folder tree for the folder view, built from the scan.
+        self.folder_tree: FolderNode | None = None
 
         self.current_track: Track | None = None
         self.current_playlist: list[Track] = []
@@ -108,14 +115,41 @@ class JetMusicPlayerApp(App):
         self.query_one("#player").display = False
         # #home wraps the Braille header and the browser; toggle it as one view.
         self.query_one("#home").display = True
-        self.query_one("#browser", Browser).focus()
+        browser = self.query_one("#browser", Browser)
+        # Crossing into the browser always lands on the default Artists view, so
+        # `b` from the player is predictable (a second `b` then flips to folders).
+        browser.reset_to_artists()
+        self._sync_browse_label()
+        browser.focus()
 
     def _show_player(self) -> None:
         self.query_one("#home").display = False
         self.query_one("#player").display = True
 
     def action_browse(self) -> None:
-        self._show_browser()
+        """The `b` key. From the player, cross over to the browser (landing on
+        the default Artists view). Pressed again while already in the browser,
+        it flips the browser's structure between the Artists (metadata) view and
+        the folder view — so a second `b` from the player reaches folders."""
+        if self.query_one("#player").display:
+            self._show_browser()
+            return
+        # Already in the browser: toggle metadata <-> folder structure.
+        self.query_one("#browser", Browser).toggle_view_mode()
+        self._sync_browse_label()
+
+    def _sync_browse_label(self) -> None:
+        """Relabel the `b` footer entry to name the view it will switch to:
+        "Browse Folders" while showing Artists, "Browse Artists" while showing
+        Folders. `Binding` is immutable, so swap in a re-described copy and ask
+        the footer to refresh."""
+        in_folders = self.query_one("#browser", Browser).in_folder_view
+        label = "Browse Artists" if in_folders else "Browse Folders"
+        bindings = self._bindings.key_to_bindings.get("b")
+        if not bindings:
+            return
+        bindings[:] = [replace(b, description=label) for b in bindings]
+        self.refresh_bindings()
 
     def action_back(self) -> None:
         """Escape is the universal back button, looping between the two views:
@@ -156,12 +190,18 @@ class JetMusicPlayerApp(App):
         If the scan found nothing, keep the current library rather than swapping
         to an empty one — but always clear the scanning placeholder."""
         if not library and self.library:
-            self.query_one("#browser", Browser).set_library(self.library)
+            self.query_one("#browser", Browser).set_library(
+                self.library, self.folder_tree
+            )
             self.notify(f"No audio files found in {music_dir}", severity="warning")
             return
         self.music_dir = music_dir
         self.library = library
-        self.query_one("#browser", Browser).set_library(library)
+        # Build the on-disk folder tree for the folder view from the same scan.
+        self.folder_tree = build_folder_tree(music_dir, library)
+        self.query_one("#browser", Browser).set_library(library, self.folder_tree)
+        # A fresh library resets the browser to Artists; keep the label in sync.
+        self._sync_browse_label()
 
     # ---- browser -> play ----
 

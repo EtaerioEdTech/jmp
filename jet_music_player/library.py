@@ -45,6 +45,36 @@ class Artist:
     albums: dict[str, Album] = field(default_factory=dict)
 
 
+@dataclass
+class FolderNode:
+    """A directory in the on-disk folder view.
+
+    Mirrors the real filesystem tree beneath the music root: `subfolders` are
+    the immediate child directories that contain audio (directly or deeper),
+    and `tracks` are the audio files sitting *directly* in this folder. A
+    folder can hold both (its own loose files plus nested subfolders).
+
+    This is built from the already-scanned tracks (see `build_folder_tree`), so
+    it needs no extra disk I/O and stays consistent with the metadata view.
+    """
+    name: str                                    # display name (the dir's basename)
+    path: str                                    # absolute path of the directory
+    subfolders: dict[str, "FolderNode"] = field(default_factory=dict)
+    tracks: list[Track] = field(default_factory=list)
+
+    def all_tracks(self) -> list[Track]:
+        """Every track under this folder, recursing through all subfolders.
+
+        Used for shuffle-a-folder: shuffling a bucket plays everything beneath
+        it. Order is a stable depth-first walk (own tracks first, then each
+        subfolder); the caller shuffles when it wants random order.
+        """
+        out = list(self.tracks)
+        for name in sorted(self.subfolders, key=str.lower):
+            out.extend(self.subfolders[name].all_tracks())
+        return out
+
+
 def scan_library(
     root: Path,
     *,
@@ -141,7 +171,11 @@ def _build_library(records: Iterable[dict]) -> dict[str, Artist]:
     album_names: dict[str, dict[str, dict[str, int]]] = {}
 
     for rec in records:
-        artist_name = rec["artist"]
+        # Group by the primary/lead artist: collaboration tags like
+        # "B.B. King, Pat Metheny, Dave Brubeck" file under "B.B. King". This
+        # runs at grouping time (not on the cached record) so it takes effect
+        # without a cache rebuild, and the raw tag is left intact on disk.
+        artist_name = _primary_artist(rec["artist"])
         album_name = rec["album"]
         artist_key = _norm_key(artist_name)
         album_key = _norm_key(album_name)
@@ -177,6 +211,55 @@ def _build_library(records: Iterable[dict]) -> dict[str, Artist]:
         resolved[artist.name] = artist
 
     return resolved
+
+
+# ---- folder view ----
+
+def build_folder_tree(root: Path, library: dict[str, Artist]) -> FolderNode:
+    """Build the on-disk folder tree for the folder view from an already-scanned
+    `library`.
+
+    Every track knows its own file path, so we can reconstruct the directory
+    structure beneath `root` without touching the disk again. Each track is
+    filed under the folder that directly contains it; intermediate directories
+    are created as needed so the tree mirrors the real filesystem. Only folders
+    that actually contain audio (directly or via a descendant) appear.
+
+    The returned root node's tracks are files sitting directly in `root`; its
+    subfolders are the first-level directories under it. Track display names in
+    this view come from the filename (see `Browser`), not tags.
+    """
+    root = Path(root).expanduser().resolve()
+    tree = FolderNode(name=root.name or str(root), path=str(root))
+
+    # Walk every track once, threading it down (creating) the chain of folder
+    # nodes from the root to the file's own directory.
+    for artist in library.values():
+        for album in artist.albums.values():
+            for track in album.tracks:
+                _file_track(tree, root, track)
+    return tree
+
+
+def _file_track(tree: FolderNode, root: Path, track: Track) -> None:
+    """Place `track` in `tree` under the folder chain implied by its path."""
+    try:
+        rel = Path(track.path).resolve().relative_to(root)
+    except ValueError:
+        # Track lives outside the root (shouldn't happen for a normal scan);
+        # drop it straight in the root folder so it's never lost.
+        tree.tracks.append(track)
+        return
+
+    node = tree
+    # rel.parts is (dir, dir, ..., filename); everything but the last is a dir.
+    for part in rel.parts[:-1]:
+        child = node.subfolders.get(part)
+        if child is None:
+            child = FolderNode(name=part, path=str(Path(node.path) / part))
+            node.subfolders[part] = child
+        node = child
+    node.tracks.append(track)
 
 
 # ---- on-disk metadata cache ----
@@ -237,14 +320,48 @@ def _first(value):
 # Case-insensitive, requires a word boundary so it won't clip real names.
 _FEATURED_RE = re.compile(r"\s+(?:feat\.?|ft\.?|featuring|with)\s+.*$", re.IGNORECASE)
 
+# A leading "The " (grouped so "The Tallest Man…" == "Tallest Man…").
+_LEADING_THE_RE = re.compile(r"^the\s+")
+# Any run of non-word, non-space characters — punctuation. Turned into a space
+# so "AC/DC" == "AC DC", "B.B. King" == "B B King", "JAY-Z" == "JAY Z".
+_PUNCT_RE = re.compile(r"[^\w\s]+", re.UNICODE)
+# Two adjacent single-letter "words" — the residue of spelled-out initials once
+# punctuation is gone. Joined so "B B King" (from "B.B. King" / "B. B. King")
+# collapses to "bb king", matching "BB King". Applied repeatedly for runs of
+# three or more initials.
+_INITIALS_RE = re.compile(r"\b(\w) (\w)\b")
+
 
 def _norm_key(name: str) -> str:
-    """Canonical key for grouping names that differ only by case/whitespace.
+    """Canonical key for grouping names that are the same act/album written
+    differently — case, whitespace, punctuation, or a leading "The".
 
-    "The Tallest Man On Earth" and "The Tallest Man on Earth" collapse to the
-    same key. Distinct names (e.g. "Shallow Grave" vs "Shallow Graves") don't.
+    All of these collapse to one key:
+        "The Tallest Man On Earth" / "The Tallest Man on Earth"
+        "AC/DC" / "AC DC"
+        "B. B. King" / "B.B. King" / "B.B.King"
+        "JAY-Z" / "Jay-Z"
+        "The California Honeydrops" / "California Honeydrops,"
+
+    Distinct names (e.g. "Shallow Grave" vs "Shallow Graves") still differ.
+    Punctuation is replaced with a space rather than deleted, so it can't fuse
+    two separate words into one (keeping the key from over-merging).
     """
-    return " ".join(name.split()).casefold()
+    n = " ".join(name.split()).casefold()
+    # Drop a leading "The " only when a name remains after it (so a band
+    # literally named "The" is left alone).
+    stripped = _LEADING_THE_RE.sub("", n)
+    if stripped:
+        n = stripped
+    n = _PUNCT_RE.sub(" ", n)
+    n = " ".join(n.split())
+    # Collapse spelled-out initials ("b b king" -> "bb king"). Loop so runs of
+    # 3+ single letters join fully; the regex only fuses one pair per pass.
+    prev = None
+    while prev != n:
+        prev = n
+        n = _INITIALS_RE.sub(r"\1\2", n)
+    return n
 
 
 def _best_display(names: dict[str, int]) -> str:
@@ -270,6 +387,33 @@ def _strip_featured(value):
     if not value:
         return value
     return _FEATURED_RE.sub("", value).strip() or value
+
+
+# The primary artist is everything before the first collaboration separator:
+# a comma, " - ", or a feat./ft./featuring/with/x join. "&" is deliberately
+# NOT a separator, so real act names built with "&" (Simon & Garfunkel,
+# Jay-Z & Kanye West) stay whole rather than splitting at the ampersand.
+_PRIMARY_ARTIST_RE = re.compile(
+    r"\s*(?:,|\s-\s|\bfeat\.?\b|\bft\.?\b|\bfeaturing\b|\bwith\b|\bx\b).*$",
+    re.IGNORECASE,
+)
+
+
+def _primary_artist(name: str) -> str:
+    """Reduce a collaboration/compilation artist tag to its lead artist.
+
+    "B.B. King, Pat Metheny, Dave Brubeck"  -> "B.B. King"
+    "BB King, Big Mama Thornton, ..."        -> "BB King"
+    "Miles Davis feat. John Coltrane"        -> "Miles Davis"
+    "California Honeydrops,"                  -> "California Honeydrops"
+
+    Left unchanged when there's no separator, or when cutting would leave
+    nothing (so a name that starts with a separator-like token isn't lost).
+    """
+    if not name:
+        return name
+    cut = _PRIMARY_ARTIST_RE.sub("", name).strip()
+    return cut or name
 
 
 def _parse_track_num(value) -> int:

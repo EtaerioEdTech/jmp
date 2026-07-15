@@ -24,31 +24,51 @@ from .braille import (
 )
 
 
+def _file_label(track: Track) -> str:
+    """The folder-view display name for a track: its filename without the
+    extension (a pure on-disk name, independent of metadata tags)."""
+    return Path(track.path).stem
+
+
 def _snap(dot_y: int) -> int:
     """Round a dot-row offset down to a Braille cell boundary (multiple of
     DOT_H). Bitmap-font text only renders solid when its top sits on a cell
     boundary; off-grid offsets split each glyph across two rows of cells and it
     reads as a hollow outline."""
     return (dot_y // DOT_H) * DOT_H
-from .library import Artist, Track
+from pathlib import Path
+
+from .library import Artist, FolderNode, Track
 
 
 class Browser(Widget, can_focus=True):
     """A pure-text, SSH-menu-style library browser.
 
     No tree widget, no boxes: a single-column list of the current level with
-    a `›` cursor. Arrow keys move, Enter drills down (artist -> album -> track)
-    or plays a track, Left / Backspace goes back up a level.
+    a `›` cursor. Arrow keys move, Enter drills down or plays a track, Left /
+    Backspace goes back up a level.
+
+    Two *view modes*, toggled with `b` (see `toggle_view_mode`):
+
+      * "metadata" — the tag-based Artist -> Album -> Track drill-down.
+      * "folders"  — a pure on-disk view that mirrors the directory tree,
+        drilling folder-by-folder. Lets the user treat any folder as a
+        playlist/bucket and shuffle everything under it.
     """
 
-    # Levels of the drill-down.
+    # View modes.
+    METADATA = "metadata"
+    FOLDERS = "folders"
+
+    # Levels of the metadata drill-down.
     ARTISTS = "artists"
     ALBUMS = "albums"
     TRACKS = "tracks"
 
-    # A synthetic first row at the ARTISTS level that shuffles the whole
-    # library, presented as if it were an artist. Selecting it (Enter or `s`)
-    # plays every track in random order.
+    # A synthetic first row at the top level that shuffles the whole library,
+    # presented as if it were an entry. Selecting it (Enter or `s`) plays every
+    # track in random order. Shown at the ARTISTS level (metadata view) and at
+    # the folder-view root.
     SHUFFLE_ALL_LABEL = "⤮  Shuffle All"
 
     class TrackChosen(Message):
@@ -69,14 +89,25 @@ class Browser(Widget, can_focus=True):
             self.tracks = tracks   # already shuffled
             self.scope = scope     # human label, e.g. "Radiohead" or "Kid A"
 
-    def __init__(self, library: dict[str, Artist], **kwargs) -> None:
+    def __init__(
+        self,
+        library: dict[str, Artist],
+        folder_tree: FolderNode | None = None,
+        **kwargs,
+    ) -> None:
         super().__init__(**kwargs)
         self._library = library
+        self._folder_tree = folder_tree
+        self._view = self.METADATA
         self._level = self.ARTISTS
         self._cursor = 0
-        # Selection context as we drill down.
+        # Selection context as we drill down (metadata view).
         self._artist_name = ""
         self._album_name = ""
+        # Navigation stack for the folder view: the chain of FolderNodes from
+        # the root down to the folder currently shown. [] means metadata view;
+        # [root] means the folder-view top level.
+        self._folder_stack: list[FolderNode] = []
         self._rows: list[str] = []
         self._empty = not library
         # True while the library is still being scanned in the background; shows
@@ -90,11 +121,57 @@ class Browser(Widget, can_focus=True):
 
     # ---- data ----
 
-    def set_library(self, library: dict[str, Artist]) -> None:
+    def set_library(
+        self, library: dict[str, Artist], folder_tree: FolderNode | None = None
+    ) -> None:
         self._library = library
+        self._folder_tree = folder_tree
         self._empty = not library
         self._scanning = False
+        # Reset to the metadata Artists top level on a fresh library.
+        self._view = self.METADATA
         self._level = self.ARTISTS
+        self._folder_stack = []
+        self._cursor = 0
+        self._rebuild_rows()
+        self.refresh()
+
+    # ---- view mode ----
+
+    @property
+    def in_folder_view(self) -> bool:
+        """True when the folder structure is currently shown (vs. Artists)."""
+        return self._view == self.FOLDERS
+
+    def reset_to_artists(self) -> None:
+        """Return to the metadata Artists top level. Used when crossing into the
+        browser from the player, so `b` from the player always lands on the
+        default Artists view (a second `b` then flips to folders)."""
+        self._view = self.METADATA
+        self._level = self.ARTISTS
+        self._folder_stack = []
+        self._cursor = 0
+        self._rebuild_rows()
+        self.refresh()
+
+    def toggle_view_mode(self) -> None:
+        """Flip between the metadata (Artists) view and the folder view.
+
+        Always lands at that view's top level with the cursor reset, so `b`
+        reads as "show me the other structure from the top". A no-op if there's
+        no folder tree to show.
+        """
+        if self._empty:
+            return
+        if self._view == self.METADATA:
+            if self._folder_tree is None:
+                return
+            self._view = self.FOLDERS
+            self._folder_stack = [self._folder_tree]
+        else:
+            self._view = self.METADATA
+            self._level = self.ARTISTS
+            self._folder_stack = []
         self._cursor = 0
         self._rebuild_rows()
         self.refresh()
@@ -127,10 +204,35 @@ class Browser(Widget, can_focus=True):
     def _tracks(self) -> list[Track]:
         return self._library[self._artist_name].albums[self._album_name].tracks
 
+    # ---- folder-view data ----
+
+    def _folder_current(self) -> FolderNode:
+        """The folder currently shown (top of the navigation stack)."""
+        return self._folder_stack[-1]
+
+    def _folder_at_root(self) -> bool:
+        """True when the folder view is at its top level."""
+        return len(self._folder_stack) == 1
+
+    def _subfolders_sorted(self) -> list[str]:
+        return sorted(self._folder_current().subfolders, key=str.lower)
+
+    def _folder_tracks(self) -> list[Track]:
+        """Tracks sitting directly in the current folder, name-sorted."""
+        return sorted(self._folder_current().tracks, key=lambda t: _file_label(t).lower())
+
+    def _folder_shuffle_all_offset(self) -> int:
+        """Number of synthetic rows before the folder listing: a 'Shuffle All'
+        row at the folder-view root only."""
+        return 1 if self._folder_at_root() else 0
+
     def _rebuild_rows(self) -> None:
-        """Recompute the visible row labels for the current level."""
+        """Recompute the visible row labels for the current level/view."""
         if self._empty:
             self._rows = []
+            return
+        if self._view == self.FOLDERS:
+            self._rebuild_folder_rows()
             return
         if self._level == self.ARTISTS:
             # "Shuffle All" sits at the top, as if it were an artist.
@@ -147,6 +249,19 @@ class Browser(Widget, can_focus=True):
                 num = f"{t.track_num:02d}. " if t.track_num else ""
                 rows.append(f"{num}{t.title}")
             self._rows = rows
+
+    def _rebuild_folder_rows(self) -> None:
+        """Rows for the current folder: subfolders (with a trailing '/') first,
+        then this folder's own tracks (by filename). 'Shuffle All' leads the
+        list at the folder-view root."""
+        rows: list[str] = []
+        if self._folder_at_root():
+            rows.append(self.SHUFFLE_ALL_LABEL)
+        for name in self._subfolders_sorted():
+            rows.append(f"⌁  {name}/")
+        for t in self._folder_tracks():
+            rows.append(_file_label(t))
+        self._rows = rows
 
     # ---- navigation ----
 
@@ -174,8 +289,12 @@ class Browser(Widget, can_focus=True):
 
     def _shuffle(self) -> None:
         """Shuffle the folder under the cursor: all of an artist's songs, a
-        whole album, or (on a track) that track's album."""
+        whole album, or (on a track) that track's album. In the folder view,
+        shuffles the highlighted folder and everything nested under it."""
         if not self._rows:
+            return
+        if self._view == self.FOLDERS:
+            self._shuffle_folder_view()
             return
         if self._on_shuffle_all():
             self._shuffle_all()
@@ -206,6 +325,46 @@ class Browser(Widget, can_focus=True):
         random.shuffle(tracks)
         self.post_message(self.ShuffleChosen(tracks, "Shuffle All"))
 
+    def _shuffle_folder_view(self) -> None:
+        """Shuffle in the folder view. On the 'Shuffle All' row, shuffles the
+        whole library; on a subfolder row, shuffles that folder and every track
+        nested beneath it; on a track row, shuffles the current folder's own
+        tracks (the local bucket)."""
+        kind, obj = self._folder_row_target()
+        if kind == "shuffle_all":
+            self._shuffle_all()
+            return
+        if kind == "folder":
+            tracks = obj.all_tracks()
+            scope = obj.name
+        else:  # "track": shuffle this folder's directly-held tracks
+            tracks = self._folder_tracks()
+            scope = self._folder_current().name
+        if not tracks:
+            return
+        shuffled = list(tracks)
+        random.shuffle(shuffled)
+        self.post_message(self.ShuffleChosen(shuffled, scope))
+
+    def _folder_row_target(self) -> tuple[str, object]:
+        """Resolve what the cursor points at in the folder view.
+
+        Returns ("shuffle_all", None), ("folder", FolderNode), or
+        ("track", Track). Row order is: [Shuffle All (root only)], subfolders,
+        then this folder's tracks — matching `_rebuild_folder_rows`.
+        """
+        idx = self._cursor
+        off = self._folder_shuffle_all_offset()
+        if off and idx == 0:
+            return ("shuffle_all", None)
+        idx -= off
+        subs = self._subfolders_sorted()
+        if idx < len(subs):
+            return ("folder", self._folder_current().subfolders[subs[idx]])
+        idx -= len(subs)
+        tracks = self._folder_tracks()
+        return ("track", tracks[idx])
+
     def _move(self, delta: int) -> None:
         if not self._rows:
             return
@@ -214,6 +373,9 @@ class Browser(Widget, can_focus=True):
 
     def _enter(self) -> None:
         if not self._rows:
+            return
+        if self._view == self.FOLDERS:
+            self._enter_folder_view()
             return
         if self._on_shuffle_all():
             self._shuffle_all()
@@ -237,10 +399,36 @@ class Browser(Widget, can_focus=True):
                 self.TrackChosen(track, list(tracks), self._artist_name, self._album_name)
             )
 
+    def _enter_folder_view(self) -> None:
+        """Advance in the folder view: drill into a subfolder, or play a track.
+
+        Playing a track uses the current folder's own tracks as the playlist
+        (in filename order), so it behaves like an ad-hoc bucket. The 'artist'
+        the player shows for these is the folder name.
+        """
+        kind, obj = self._folder_row_target()
+        if kind == "shuffle_all":
+            self._shuffle_all()
+            return
+        if kind == "folder":
+            self._folder_stack.append(obj)
+            self._cursor = 0
+            self._rebuild_rows()
+            self.refresh()
+            return
+        # Track: play it within this folder's tracks.
+        tracks = self._folder_tracks()
+        folder = self._folder_current()
+        self.post_message(
+            self.TrackChosen(obj, list(tracks), folder.name, "")
+        )
+
     def _back(self) -> bool:
         """Go back up one drill-down level. Returns True if a level was popped,
-        False if already at the top (ARTISTS) — the caller uses that to decide
-        whether Escape should instead cross over to the player view."""
+        False if already at the top — the caller uses that to decide whether
+        Escape should instead cross over to the player view."""
+        if self._view == self.FOLDERS:
+            return self._back_folder_view()
         if self._level == self.TRACKS:
             self._level = self.ALBUMS
             # Restore cursor to the album we came from.
@@ -261,6 +449,21 @@ class Browser(Widget, can_focus=True):
         # At ARTISTS level, back does nothing here.
         return False
 
+    def _back_folder_view(self) -> bool:
+        """Pop one folder off the navigation stack, restoring the cursor onto
+        the subfolder we came from. Returns False at the folder-view root, so
+        Escape then crosses over to the player."""
+        if self._folder_at_root():
+            return False
+        child = self._folder_stack.pop()
+        self._rebuild_rows()
+        # Put the cursor back on the folder we just left.
+        subs = self._subfolders_sorted()
+        off = self._folder_shuffle_all_offset()
+        self._cursor = off + (subs.index(child.name) if child.name in subs else 0)
+        self.refresh()
+        return True
+
     def back_up_level(self) -> bool:
         """Public entry for the app's Escape handler: pop one browser level.
         Returns False when already at the top level (ARTISTS)."""
@@ -269,6 +472,12 @@ class Browser(Widget, can_focus=True):
     # ---- render ----
 
     def _heading(self) -> str:
+        if self._view == self.FOLDERS:
+            if self._folder_at_root():
+                return "FOLDERS"
+            # Breadcrumb of the path below the root, e.g. "FOLDERS — Rock / 90s".
+            crumb = " / ".join(n.name for n in self._folder_stack[1:])
+            return f"FOLDERS — {crumb}"
         if self._level == self.ARTISTS:
             return "ARTISTS"
         if self._level == self.ALBUMS:
@@ -276,9 +485,13 @@ class Browser(Widget, can_focus=True):
         return f"{self._artist_name} — {self._album_name}"
 
     def _hint(self) -> str:
+        if self._view == self.FOLDERS:
+            if self._folder_at_root():
+                return "↑↓ move   → open   s shuffle   b artists   d dir   q quit"
+            return "↑↓ move   → open   ← back   s shuffle   b artists   d dir"
         if self._level == self.ARTISTS:
-            return "↑↓ move   → open   s shuffle   d dir   q quit"
-        return "↑↓ move   → open   ← back   s shuffle   d dir"
+            return "↑↓ move   → open   s shuffle   b folders   d dir   q quit"
+        return "↑↓ move   → open   ← back   s shuffle   b folders   d dir"
 
     # Fixed chrome around the scrolling row window: heading + rule + blank line
     # above, blank line + hint below.
