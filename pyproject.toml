@@ -18,13 +18,19 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Topic :: Multimedia :: Sound/Audio :: Players",
 ]
+# pygame is the desktop audio backend but doesn't build/run on Android/Termux
+# (its SDL_mixer audio can't init headless there), where the mpv backend is used
+# instead. So it's an optional extra rather than a hard dependency: desktop users
+# install `.[desktop]`; on Termux install the base deps and the `mpv` package.
 dependencies = [
     "textual>=0.60.0",
-    "pygame>=2.5.0",
     "mutagen>=1.47.0",
     "numpy>=1.24.0",
     "pydub>=0.25.1",
 ]
+
+[project.optional-dependencies]
+desktop = ["pygame>=2.5.0"]
 
 [project.scripts]
 jmp = "jet_music_player.cli:main"

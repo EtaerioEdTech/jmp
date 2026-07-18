@@ -12,6 +12,8 @@ import random
 import numpy as np
 from rich.text import Text
 from textual import events
+from textual.app import ComposeResult
+from textual.containers import Horizontal, Vertical
 from textual.message import Message
 from textual.widget import Widget
 
@@ -469,6 +471,25 @@ class Browser(Widget, can_focus=True):
         Returns False when already at the top level (ARTISTS)."""
         return self._back()
 
+    # ---- public nav entry points for the touch d-pad ----
+    # These mirror the on_key handlers so the on-screen controls drive the same
+    # navigation as the keyboard, without synthesizing key events.
+
+    def nav_up(self) -> None:
+        """Move the selection up one row (touch ▲)."""
+        if not self._empty:
+            self._move(-1)
+
+    def nav_down(self) -> None:
+        """Move the selection down one row (touch ▼)."""
+        if not self._empty:
+            self._move(1)
+
+    def nav_select(self) -> None:
+        """Open/drill-in or play the highlighted row (touch ▶ / select)."""
+        if not self._empty:
+            self._enter()
+
     # ---- render ----
 
     def _heading(self) -> str:
@@ -591,6 +612,10 @@ class Visualizer(Widget):
     # meter for VOLUME_FRAMES ticks (~1 s at 30 fps) before the spectrum returns.
     VOLUME_FRAMES = 30
 
+    class Tapped(Message):
+        """Posted when the visualizer area is tapped — used by the touch
+        overlay to toggle play/pause (there's no center d-pad button)."""
+
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
         self._mode_idx = 0
@@ -613,6 +638,11 @@ class Visualizer(Widget):
         self._mode_idx = (self._mode_idx + 1) % len(self.MODES)
         self.refresh()
         return self.mode_label
+
+    def on_click(self, event: events.Click) -> None:
+        """Tapping the visualizer toggles play/pause (touch controls)."""
+        event.stop()
+        self.post_message(self.Tapped())
 
     def show_volume(self, volume: float) -> None:
         """Momentarily replace the spectrum with a volume meter showing `volume`
@@ -1255,3 +1285,75 @@ def _format_time(seconds: float) -> str:
     total = int(seconds)
     minutes, secs = divmod(total, 60)
     return f"{minutes}:{secs:02d}"
+
+
+class TouchButton(Widget, can_focus=False):
+    """A single tappable control in the touch overlay.
+
+    Renders one glyph centered in its box and posts a TouchPad.Pressed carrying
+    its `action` name when clicked/tapped. Kept dumb: the app decides what each
+    action does based on the current view (browser vs player).
+    """
+
+    def __init__(self, action: str, glyph: str, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.action_name = action
+        self.glyph = glyph
+
+    def render(self) -> Text:
+        # Center the glyph vertically within the button's height.
+        h = max(1, self.size.height)
+        pad = (h - 1) // 2
+        out = Text()
+        out.append("\n" * pad)
+        out.append(self.glyph, style="bold")
+        return out
+
+    def on_click(self, event: events.Click) -> None:
+        event.stop()
+        self.post_message(TouchPad.Pressed(self.action_name))
+
+
+class TouchPad(Widget, can_focus=False):
+    """On-screen touch controls for Android/Termux, docked bottom-right.
+
+    A 4-way d-pad (no center button) plus two dedicated buttons. The app routes
+    each press to an existing action depending on whether the browser or the
+    player is showing:
+
+        ▲  browser: move up      player: volume up
+        ▼  browser: move down    player: volume down
+        ▶  browser: open/select  player: next track
+        ◀  browser: back a level player: back to browser
+              (at the top level, ◀ quits — see the app's handler)
+        v  cycle visualizer
+        d  change directory
+
+    Play/pause isn't here: tapping the visualizer/now-playing area toggles it.
+    """
+
+    class Pressed(Message):
+        """Posted when a touch control is tapped. `action` is one of:
+        "up", "down", "left", "right", "viz", "dir"."""
+
+        def __init__(self, action: str) -> None:
+            super().__init__()
+            self.action = action
+
+    def compose(self) -> ComposeResult:
+        # Layout (each cell is a TouchButton):
+        #        [ ▲ ]
+        #   [ ◀ ] [ ▶ ]
+        #   [ v ] [ d ]
+        #        [ ▼ ]
+        with Vertical(id="touchpad-inner"):
+            with Horizontal(classes="touch-row"):
+                yield TouchButton("up", "▲", classes="touch-btn touch-up")
+            with Horizontal(classes="touch-row"):
+                yield TouchButton("left", "◀", classes="touch-btn")
+                yield TouchButton("right", "▶", classes="touch-btn")
+            with Horizontal(classes="touch-row"):
+                yield TouchButton("viz", "v", classes="touch-btn touch-aux")
+                yield TouchButton("dir", "d", classes="touch-btn touch-aux")
+            with Horizontal(classes="touch-row"):
+                yield TouchButton("down", "▼", classes="touch-btn touch-down")

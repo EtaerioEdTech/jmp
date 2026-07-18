@@ -5,6 +5,9 @@
 
 Screen {
     background: transparent;
+    /* "base" holds the two full-screen views; "overlay" holds the touch
+       controls so they float above without shifting the grid underneath. */
+    layers: base overlay;
 }
 
 /* Home view: the Braille header stacked above the file browser, full screen.
@@ -100,4 +103,49 @@ DirPrompt {
 #dirprompt-hint {
     padding: 1 0 0 0;
     color: $text-muted;
+}
+
+/* ---- Touch overlay (Android/Termux only; not mounted on desktop) ----
+   Floats above both the browser and player views, docked to the bottom-right
+   corner where a thumb naturally rests. Its own layer so it never disturbs the
+   character-grid layout underneath. */
+#touchpad {
+    layer: overlay;
+    dock: right;
+    width: auto;
+    height: auto;
+    align: right bottom;
+    background: transparent;
+}
+
+#touchpad-inner {
+    width: auto;
+    height: auto;
+    padding: 0 1 1 0;
+    align: right bottom;
+}
+
+/* One row of the pad — buttons sit right-aligned so the pad hugs the corner. */
+.touch-row {
+    width: auto;
+    height: auto;
+    align: right middle;
+}
+
+/* Each tappable control: a chunky, well-spaced thumb target with a light
+   rounded frame so it reads as a button without a solid fill. */
+.touch-btn {
+    width: 7;
+    height: 3;
+    margin: 0 0 0 1;
+    content-align: center middle;
+    text-align: center;
+    border: round $primary;
+    color: $text;
+}
+
+/* The two aux buttons (viz / dir) are dimmer so the d-pad reads as primary. */
+.touch-aux {
+    color: $text-muted;
+    border: round $primary-darken-2;
 }

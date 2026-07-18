@@ -17,11 +17,13 @@ import subprocess
 import tempfile
 import threading
 
-# Hide pygame's stdout banner before importing it. Textual would render it as garbage.
-os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "1"
-
 import numpy as np
-import pygame
+
+# pygame is imported lazily inside AudioEngine.__init__ rather than at module
+# level: on Android/Termux pygame isn't installed (the mpv backend is used
+# there), and MpvAudioEngine subclasses AudioEngine without ever constructing
+# the base or touching pygame. Importing it here would break `import` on Termux.
+pygame = None  # populated by AudioEngine.__init__ on desktop
 
 
 # Extensions SDL_mixer can decode directly. Anything else needs ffmpeg to be
@@ -48,6 +50,15 @@ class AudioEngine:
     FREQ_MAX = 16000.0    # Hz
 
     def __init__(self) -> None:
+        # Import pygame here, not at module load, so Termux (no pygame) can still
+        # import this module for the inherited analysis code / MpvAudioEngine.
+        global pygame
+        if pygame is None:
+            # Hide pygame's stdout banner; Textual would render it as garbage.
+            os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "1"
+            import pygame as _pygame
+
+            pygame = _pygame
         pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=1024)
         self.current_path: str | None = None
         self._temp_wav: str | None = None  # transcoded file to clean up, if any

@@ -32,7 +32,32 @@ from textual.widgets import Footer
 from .audio import AudioEngine
 from .dirprompt import DirPrompt
 from .library import Artist, FolderNode, Track, build_folder_tree, scan_library
-from .widgets import Banner, Browser, BrowserBanner, ProgressBar, UpNext, Visualizer
+from .runtime import use_mpv_backend, use_touch_controls
+from .widgets import (
+    Banner,
+    Browser,
+    BrowserBanner,
+    ProgressBar,
+    TouchPad,
+    UpNext,
+    Visualizer,
+)
+
+
+def _make_audio_engine() -> AudioEngine:
+    """Pick the audio backend: mpv on Android/Termux, pygame on desktop.
+
+    Falls back to pygame if mpv is requested but unavailable, so a missing mpv
+    surfaces the same clear error as any other backend problem.
+    """
+    if use_mpv_backend():
+        from .runtime import mpv_available
+
+        if mpv_available():
+            from .audio_mpv import MpvAudioEngine
+
+            return MpvAudioEngine()
+    return AudioEngine()
 
 
 class JetMusicPlayerApp(App):
@@ -62,7 +87,10 @@ class JetMusicPlayerApp(App):
     def __init__(self, music_dir: Path) -> None:
         super().__init__()
         self.music_dir = music_dir
-        self.engine = AudioEngine()
+        self.engine = _make_audio_engine()
+        # On-screen touch controls: mounted only on Android/Termux (or when
+        # JMP_TOUCH forces it). Desktop stays keyboard-only and unchanged.
+        self._touch = use_touch_controls()
         # The library is scanned in the background after mount (see _start_scan)
         # so a large collection doesn't block the UI from appearing. Start empty.
         self.library: dict[str, Artist] = {}
@@ -85,6 +113,10 @@ class JetMusicPlayerApp(App):
             yield ProgressBar(id="progress")
             yield UpNext(id="upnext")
         yield Footer()
+        # Touch overlay floats above both views (see app.tcss), so it's mounted
+        # once at the top level rather than inside either mode's container.
+        if self._touch:
+            yield TouchPad(id="touchpad")
 
     def on_mount(self) -> None:
         # Start in the browser; the player is hidden until a track is chosen.
@@ -169,6 +201,64 @@ class JetMusicPlayerApp(App):
         browser = self.query_one("#browser", Browser)
         if not browser.back_up_level():
             self._show_player()
+
+    # ---- touch controls ----
+
+    def on_touch_pad_pressed(self, event: "TouchPad.Pressed") -> None:
+        """Route an on-screen touch press to the right action for the current
+        view. The d-pad is context-sensitive; the aux buttons are not.
+
+            ▲ up     browser: move up      player: volume up
+            ▼ down   browser: move down    player: volume down
+            ▶ right  browser: open/select  player: next track
+            ◀ left   browser: back a level (quit at the top)
+                     player: back to the browser
+            v viz    cycle the visualizer (both views)
+            d dir    change music directory (both views)
+        """
+        in_player = self.query_one("#player").display
+        action = event.action
+
+        if action == "viz":
+            self.action_cycle_viz()
+        elif action == "dir":
+            self.action_change_dir()
+        elif action == "up":
+            if in_player:
+                self.action_vol_up()
+            else:
+                self.query_one("#browser", Browser).nav_up()
+        elif action == "down":
+            if in_player:
+                self.action_vol_down()
+            else:
+                self.query_one("#browser", Browser).nav_down()
+        elif action == "right":
+            if in_player:
+                self.action_next_track()
+            else:
+                self.query_one("#browser", Browser).nav_select()
+        elif action == "left":
+            self._touch_back()
+
+    def _touch_back(self) -> None:
+        """The ◀ button: the touch-only "escape/quit" verb.
+
+        From the player, cross back to the browser. In the browser, walk up the
+        drill-down levels; when already at the top level there's nowhere further
+        up, so — since there's no keyboard to press `q` — quit the app.
+        """
+        if self.query_one("#player").display:
+            self._show_browser()
+            return
+        browser = self.query_one("#browser", Browser)
+        if not browser.back_up_level():
+            # At the top of the browser with nowhere to go back to: quit.
+            self.exit()
+
+    def on_visualizer_tapped(self, event: "Visualizer.Tapped") -> None:
+        """Tapping the visualizer/now-playing area toggles play/pause (touch)."""
+        self.action_toggle_play()
 
     def action_change_dir(self) -> None:
         """Prompt for a new music root, then re-scan into the browser."""

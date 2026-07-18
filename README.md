@@ -98,6 +98,36 @@ install ffmpeg (above) and the terminal you run in. Use a modern
 truecolor-capable terminal with mouse support (Windows Terminal, iTerm2, or any
 recent Linux emulator); the legacy Windows `cmd.exe` console renders poorly.
 
+### Android (Termux)
+
+`jmp` runs on Android inside [Termux](https://termux.dev) (install it from
+**F-Droid**, not the Play Store — the Play build is outdated). Two things differ
+from desktop, both handled automatically when Termux is detected:
+
+- **Audio backend.** pygame's SDL audio can't initialize in a headless Termux
+  process, so on Termux `jmp` plays through **mpv** over its JSON IPC socket
+  instead (`audio_mpv.py`). The visualizer analysis pipeline is identical to
+  desktop. `pygame` is therefore an optional extra (`.[desktop]`), not installed
+  on Termux.
+- **Touch controls.** Since a phone is touch-only, an on-screen d-pad + buttons
+  (`TouchPad` in `widgets.py`) is mounted automatically, docked bottom-right —
+  see the touch table under [Controls](#controls). On desktop nothing is added.
+
+Setup on the phone:
+
+```bash
+pkg update && pkg upgrade -y
+pkg install -y python mpv ffmpeg git python-numpy
+pip install textual mutagen pydub          # NOT pygame (unused on Termux)
+termux-setup-storage                        # grant access to your music
+git clone https://github.com/EtaerioEdTech/jmp.git
+cd jmp && python run.py ~/storage/shared/Music
+```
+
+Backend selection can be forced for testing with `JMP_AUDIO=mpv|pygame` and the
+touch overlay with `JMP_TOUCH=1|0` (e.g. to preview the d-pad on a desktop with
+a mouse: `JMP_TOUCH=1 jmp ~/Music`).
+
 ## Controls
 
 **Browser** — two structures, flipped with `b`: the tag-based **Artists → Album
@@ -126,6 +156,19 @@ tree (drill folder-by-folder, treat any folder as a bucket/playlist):
 | `p`           | Previous track                                |
 | `+` / `-`     | Volume up / down                              |
 | `q`           | Quit                                          |
+
+**Touch (Android/Termux only)** — an on-screen d-pad + buttons, docked
+bottom-right. The d-pad is context-sensitive; tapping the visualizer toggles
+play/pause. Every action is reachable without a keyboard:
+
+| Button        | In the browser                    | In the player      |
+|---------------|-----------------------------------|--------------------|
+| ▲ / ▼         | Move up / down the list           | Volume up / down   |
+| ▶             | Advance — drill in / play         | Next track         |
+| ◀             | Back up a level (**quits** at the top) | Back to the browser |
+| tap visualizer| —                                 | Play / pause       |
+| `v`           | Cycle visualizer                  | Cycle visualizer   |
+| `d`           | Change the music directory        | Change the music directory |
 
 ## How it works
 
