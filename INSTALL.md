@@ -13,10 +13,49 @@ failures that look like the app is broken.
 
 ## Part 1 — Before you start
 
-### What you copied over USB
+### Getting the project onto the USB stick
 
-Copy the **whole project folder**. Two directories inside it are machine-specific
-and must be deleted rather than reused:
+USB sticks are usually formatted **exFAT or FAT32**, which support neither
+symbolic links nor Unix permissions. Use a **git bundle** — one ordinary file
+carrying the entire repository and its history:
+
+```bash
+# On the source machine, from the project dir:
+git bundle create /media/usb/jmp.bundle --all
+```
+
+That's ~100 KB. On the new machine:
+
+```bash
+git clone -b android /media/usb/jmp.bundle jmp
+cd jmp
+```
+
+This is the recommended route on a FAT/exFAT stick. A bundle is a single regular
+file, so there are no symlinks, permissions, or case-sensitive names to preserve,
+and it drops you straight onto the correct branch with full history and both
+branches intact. It also can't carry the machine-specific junk described below.
+
+<details>
+<summary>If you'd rather copy the folder directly</summary>
+
+That works too — the tracked source tree is FAT-safe (verified: no symlinks, no
+case-colliding filenames, no illegal characters, no executable bits that matter).
+**The only symlinks in the project live in `.venv/`**, which you must delete
+anyway. Delete the three directories below *before* copying, and the copy will
+complete without symlink errors.
+
+Two caveats versus a bundle: copying `.git/` file-by-file across FAT is slower
+and more fragile, and an untracked-file copy loses nothing here only because this
+project has no tracked symlinks — don't assume that for other repos.
+
+</details>
+
+### Machine-specific directories to delete
+
+**Skip this if you cloned a bundle** — a fresh clone can't contain any of it.
+If you copied the folder, three directories are machine-specific and must be
+deleted rather than reused:
 
 ```bash
 rm -rf .venv build jet_music_player.egg-info
