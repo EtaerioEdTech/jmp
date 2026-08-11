@@ -21,6 +21,7 @@ view and a pure Folders view (see `Browser.toggle_view_mode`).
 
 from __future__ import annotations
 
+import random
 from dataclasses import replace
 from pathlib import Path
 
@@ -32,6 +33,7 @@ from textual.widgets import Footer
 from .audio import AudioEngine
 from .dirprompt import DirPrompt
 from .library import Artist, FolderNode, Track, build_folder_tree, scan_library
+from .search import Match, best_match, resolve
 from .widgets import Banner, Browser, BrowserBanner, ProgressBar, UpNext, Visualizer
 
 
@@ -59,9 +61,14 @@ class JetMusicPlayerApp(App):
         ("q", "quit", "Quit"),
     ]
 
-    def __init__(self, music_dir: Path) -> None:
+    def __init__(self, music_dir: Path, query: str | None = None) -> None:
         super().__init__()
         self.music_dir = music_dir
+        # A search query from the command line (`jmp vampire weekend`). Acted on
+        # once — after the first background scan completes, since there's no
+        # library to match against before then. Cleared after it's consumed so a
+        # later re-scan (the `d` key) doesn't replay it.
+        self._pending_query = query
         self.engine = AudioEngine()
         # The library is scanned in the background after mount (see _start_scan)
         # so a large collection doesn't block the UI from appearing. Start empty.
@@ -202,6 +209,68 @@ class JetMusicPlayerApp(App):
         self.query_one("#browser", Browser).set_library(library, self.folder_tree)
         # A fresh library resets the browser to Artists; keep the label in sync.
         self._sync_browse_label()
+        # Now that there's a library to search, act on any `jmp <query>`.
+        if self._pending_query is not None:
+            query, self._pending_query = self._pending_query, None
+            self._apply_query(query)
+
+    # ---- command-line query ----
+
+    def _apply_query(self, query: str) -> None:
+        """Resolve a command-line query and either start playing or show the
+        matches in the browser.
+
+        An unambiguous hit plays straight away — an artist shuffled, an album or
+        a song in order. Ambiguous or missing matches land in the browser
+        (filtered when there was something to filter to) so the user chooses,
+        rather than having the wrong thing start playing.
+        """
+        matches = resolve(query, self.library)
+        match = best_match(matches)
+
+        if match is not None:
+            self._play_match(match)
+            return
+
+        if matches:
+            self.query_one("#browser", Browser).show_matches(query, matches)
+            self.notify(f"{len(matches)} matches for “{query}” — pick one")
+        else:
+            self.notify(f"Nothing matching “{query}”", severity="warning")
+
+    def _play_match(self, match: Match) -> None:
+        """Start playing a resolved query match and cross to the player.
+
+        Artists shuffle (a whole discography in order would always open on the
+        same song); albums keep their running order. A single song plays in the
+        context of its own album, so the queue carries on afterwards instead of
+        falling silent after one track.
+        """
+        tracks = list(match.tracks)
+        if not tracks:
+            return
+
+        index = 0
+        if match.kind == "artist":
+            random.shuffle(tracks)
+        elif match.kind == "track":
+            album = self._album_tracks(match.artist, match.album)
+            if tracks[0] in album:
+                index = album.index(tracks[0])
+                tracks = album
+
+        self.current_playlist = tracks
+        self.current_index = index
+        self._play_current()
+        self._show_player()
+
+    def _album_tracks(self, artist_name: str, album_name: str) -> list[Track]:
+        """The tracks of one album, or [] if that artist/album isn't present."""
+        artist = self.library.get(artist_name)
+        if artist is None:
+            return []
+        album = artist.albums.get(album_name)
+        return list(album.tracks) if album is not None else []
 
     # ---- browser -> play ----
 

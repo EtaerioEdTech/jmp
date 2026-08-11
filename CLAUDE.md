@@ -31,6 +31,11 @@ folder path), so the rename did not require code changes.
 
 - `python run.py [MUSIC_DIRECTORY]` — convenience entry point.
 - `pip install .` then `jmp [MUSIC_DIRECTORY]` — installs the `jmp` console script.
+- `jmp [QUERY...]` — trailing words are a search query (`jmp vampire weekend`),
+  resolved in `search.py` against the scanned library. A lone leading argument
+  is still taken as the music directory when it starts with `/`, `~`, or `.`,
+  or names an existing directory; use `-d DIR` to give both a directory and a
+  query. See `_looks_like_path` in `cli.py`.
 
 The `.venv` is relocatable — no absolute project path is baked into it.
 

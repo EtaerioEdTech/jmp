@@ -5,10 +5,15 @@ Exposed as the `jmp` console script (see pyproject.toml) and runnable as
 the `python run.py` invocation keeps working.
 
 Usage:
-    jmp [MUSIC_DIRECTORY]
+    jmp                          # browse ~/Music
+    jmp /path/to/music           # browse a different directory
+    jmp vampire weekend          # find and play, in ~/Music
+    jmp -d /path/to/music radiohead
 
-Running `jmp` launches the player. If no directory is given it defaults to
-~/Music.
+Running `jmp` bare launches the browser. Trailing words are treated as a
+search query: an unambiguous hit starts playing immediately (an artist is
+shuffled), anything ambiguous opens the browser filtered to the matches.
+If no directory is given it defaults to ~/Music.
 """
 
 from __future__ import annotations
@@ -20,25 +25,64 @@ from pathlib import Path
 from .app import JetMusicPlayerApp
 from .audio import ffmpeg_available
 
+DEFAULT_MUSIC_DIR = "~/Music"
+
+
+def _looks_like_path(word: str) -> bool:
+    """True when a bare first argument should be read as a directory, not as
+    the start of a search query.
+
+    A leading `/`, `~`, or `.` is unambiguously a path — `jmp /bad/path` should
+    report a missing directory rather than silently searching for it. An
+    existing directory is a path too. Anything else is a query, including names
+    that merely contain a slash ("AC/DC"), which would otherwise be unsearchable.
+    """
+    if word.startswith(("/", "~", ".")):
+        return True
+    return Path(word).expanduser().is_dir()
+
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         prog="jmp",
         description="Jet Music Player — a terminal music player with a live visualizer.",
+        epilog="Examples: jmp | jmp ~/Media/music | jmp vampire weekend",
     )
     parser.add_argument(
-        "music_dir",
-        nargs="?",
-        default="~/Music",
-        help="Directory to scan for music (default: ~/Music).",
+        "-d",
+        "--dir",
+        dest="music_dir",
+        default=None,
+        metavar="MUSIC_DIRECTORY",
+        help=f"Directory to scan for music (default: {DEFAULT_MUSIC_DIR}).",
+    )
+    parser.add_argument(
+        "words",
+        nargs="*",
+        metavar="QUERY",
+        help=(
+            "An artist, album, or song to play right away. With no -d and no "
+            "query, a single path argument is taken as the music directory."
+        ),
     )
     args = parser.parse_args(argv)
 
-    music_dir = Path(args.music_dir).expanduser()
+    words: list[str] = list(args.words)
+    music_dir_arg = args.music_dir
+
+    # Backward compatibility: `jmp /path/to/music` (no -d) still means "browse
+    # this directory". Only a lone leading argument that looks like a path is
+    # claimed as the directory; everything else stays part of the query.
+    if music_dir_arg is None and words and _looks_like_path(words[0]):
+        music_dir_arg = words.pop(0)
+
+    music_dir = Path(music_dir_arg or DEFAULT_MUSIC_DIR).expanduser()
+    query = " ".join(words).strip()
 
     if not music_dir.exists():
         print(f"Music directory not found: {music_dir}")
         print("Pass a path as an argument: jmp /path/to/music")
+        print("Or search a different library: jmp -d /path/to/music vampire weekend")
         sys.exit(1)
 
     if not ffmpeg_available():
@@ -54,7 +98,7 @@ def main(argv: list[str] | None = None) -> None:
         except (KeyboardInterrupt, EOFError):
             sys.exit(1)
 
-    app = JetMusicPlayerApp(music_dir)
+    app = JetMusicPlayerApp(music_dir, query=query or None)
     app.run()
 
 

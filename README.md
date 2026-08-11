@@ -83,6 +83,28 @@ jmp                        # scans ~/Music
 jmp /path/to/music         # scans a specific directory
 ```
 
+### Play something straight away
+
+Add an artist, album, or song after the command and it starts playing as soon
+as the scan finishes — no browsing:
+
+```bash
+jmp vampire weekend        # shuffles everything by that artist
+jmp cowboy carter          # plays that album in order
+jmp horchata               # plays that song, then the rest of its album
+jmp -d /path/to/music radiohead
+```
+
+Matching ignores case, punctuation, and accents, so `jmp acdc` finds AC/DC and
+`jmp beyonce` finds Beyoncé. Artists beat albums beat song titles when a name
+could mean several things.
+
+If the query is ambiguous — say six different albums called *Can't Tell Me
+Nothing* — the browser opens filtered to just those matches, labelled with the
+artist so you can pick. `→` plays the highlighted one, `s` shuffles it, and `←`
+backs out to the full artist list. A query that matches nothing drops you in
+the normal browser with a notice.
+
 Or run straight from a clone without installing:
 
 ```bash

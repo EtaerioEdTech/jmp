@@ -64,6 +64,9 @@ class Browser(Widget, can_focus=True):
     ARTISTS = "artists"
     ALBUMS = "albums"
     TRACKS = "tracks"
+    # A flat list of search results from an ambiguous `jmp <query>`. Sits above
+    # ARTISTS: backing out of it returns to the normal Artists list.
+    RESULTS = "results"
 
     # A synthetic first row at the top level that shuffles the whole library,
     # presented as if it were an entry. Selecting it (Enter or `s`) plays every
@@ -109,6 +112,10 @@ class Browser(Widget, can_focus=True):
         # [root] means the folder-view top level.
         self._folder_stack: list[FolderNode] = []
         self._rows: list[str] = []
+        # Search-result state for the RESULTS level: the query that produced it
+        # and the ranked matches, parallel to the rows shown.
+        self._query = ""
+        self._matches: list = []
         self._empty = not library
         # True while the library is still being scanned in the background; shows
         # a "Scanning…" placeholder instead of the empty-library message.
@@ -128,13 +135,55 @@ class Browser(Widget, can_focus=True):
         self._folder_tree = folder_tree
         self._empty = not library
         self._scanning = False
-        # Reset to the metadata Artists top level on a fresh library.
+        # Reset to the metadata Artists top level on a fresh library. Any search
+        # results are dropped: they point into the library being replaced.
         self._view = self.METADATA
         self._level = self.ARTISTS
         self._folder_stack = []
+        self._matches = []
+        self._query = ""
         self._cursor = 0
         self._rebuild_rows()
         self.refresh()
+
+    # ---- search results ----
+
+    def show_matches(self, query: str, matches: list) -> None:
+        """Show the ranked matches for an ambiguous `jmp <query>` as a flat
+        pick-list (see `search.resolve`).
+
+        Each row is one match — an artist, an album, or a song — labelled with
+        its kind so "Live" the album reads differently from "Live" the track.
+        Enter plays the highlighted one; Escape/← drops back to the normal
+        Artists list, so the filtered view is never a dead end.
+        """
+        if self._empty or not matches:
+            return
+        self._view = self.METADATA
+        self._level = self.RESULTS
+        self._query = query
+        self._matches = list(matches)
+        self._cursor = 0
+        self._rebuild_rows()
+        self.refresh()
+
+    def _rebuild_result_rows(self) -> None:
+        """One row per match: a kind glyph, the name, and the context that
+        disambiguates it (the artist for an album, "artist · album" for a
+        track, the track count for an artist)."""
+        glyphs = {"artist": "◆", "album": "▣", "track": "♪"}
+        rows: list[str] = []
+        for m in self._matches:
+            glyph = glyphs.get(m.kind, "·")
+            if m.kind == "artist":
+                n = len(m.tracks)
+                detail = f"{n} track{'s' if n != 1 else ''}"
+            elif m.kind == "album":
+                detail = m.artist
+            else:
+                detail = f"{m.artist} · {m.album}" if m.album else m.artist
+            rows.append(f"{glyph}  {m.label}   —  {detail}" if detail else f"{glyph}  {m.label}")
+        self._rows = rows
 
     # ---- view mode ----
 
@@ -150,6 +199,8 @@ class Browser(Widget, can_focus=True):
         self._view = self.METADATA
         self._level = self.ARTISTS
         self._folder_stack = []
+        self._matches = []
+        self._query = ""
         self._cursor = 0
         self._rebuild_rows()
         self.refresh()
@@ -234,7 +285,9 @@ class Browser(Widget, can_focus=True):
         if self._view == self.FOLDERS:
             self._rebuild_folder_rows()
             return
-        if self._level == self.ARTISTS:
+        if self._level == self.RESULTS:
+            self._rebuild_result_rows()
+        elif self._level == self.ARTISTS:
             # "Shuffle All" sits at the top, as if it were an artist.
             self._rows = [self.SHUFFLE_ALL_LABEL] + self._artists_sorted()
         elif self._level == self.ALBUMS:
@@ -295,6 +348,15 @@ class Browser(Widget, can_focus=True):
             return
         if self._view == self.FOLDERS:
             self._shuffle_folder_view()
+            return
+        if self._level == self.RESULTS:
+            # `s` on a result shuffles whatever that match covers.
+            if 0 <= self._cursor < len(self._matches):
+                match = self._matches[self._cursor]
+                tracks = list(match.tracks)
+                if tracks:
+                    random.shuffle(tracks)
+                    self.post_message(self.ShuffleChosen(tracks, match.label))
             return
         if self._on_shuffle_all():
             self._shuffle_all()
@@ -377,6 +439,9 @@ class Browser(Widget, can_focus=True):
         if self._view == self.FOLDERS:
             self._enter_folder_view()
             return
+        if self._level == self.RESULTS:
+            self._enter_result()
+            return
         if self._on_shuffle_all():
             self._shuffle_all()
             return
@@ -398,6 +463,41 @@ class Browser(Widget, can_focus=True):
             self.post_message(
                 self.TrackChosen(track, list(tracks), self._artist_name, self._album_name)
             )
+
+    def _enter_result(self) -> None:
+        """Play the highlighted search result.
+
+        Mirrors what an unambiguous `jmp <query>` would have done: an artist is
+        shuffled, an album plays in track order, a song plays within its album.
+        """
+        if not (0 <= self._cursor < len(self._matches)):
+            return
+        match = self._matches[self._cursor]
+        tracks = list(match.tracks)
+        if not tracks:
+            return
+        if match.kind == "artist":
+            random.shuffle(tracks)
+            self.post_message(self.ShuffleChosen(tracks, match.label))
+        elif match.kind == "album":
+            self.post_message(
+                self.TrackChosen(tracks[0], tracks, match.artist, match.album)
+            )
+        else:
+            # A single song: play it in the context of its own album so the
+            # playlist continues naturally instead of stopping after one track.
+            playlist = self._album_tracks(match.artist, match.album) or tracks
+            self.post_message(
+                self.TrackChosen(tracks[0], list(playlist), match.artist, match.album)
+            )
+
+    def _album_tracks(self, artist_name: str, album_name: str) -> list[Track]:
+        """The tracks of one album, or [] if that artist/album isn't present."""
+        artist = self._library.get(artist_name)
+        if artist is None:
+            return []
+        album = artist.albums.get(album_name)
+        return list(album.tracks) if album is not None else []
 
     def _enter_folder_view(self) -> None:
         """Advance in the folder view: drill into a subfolder, or play a track.
@@ -429,6 +529,15 @@ class Browser(Widget, can_focus=True):
         Escape should instead cross over to the player view."""
         if self._view == self.FOLDERS:
             return self._back_folder_view()
+        if self._level == self.RESULTS:
+            # Leave the filtered results for the full Artists list.
+            self._level = self.ARTISTS
+            self._matches = []
+            self._query = ""
+            self._cursor = 0
+            self._rebuild_rows()
+            self.refresh()
+            return True
         if self._level == self.TRACKS:
             self._level = self.ALBUMS
             # Restore cursor to the album we came from.
@@ -478,6 +587,8 @@ class Browser(Widget, can_focus=True):
             # Breadcrumb of the path below the root, e.g. "FOLDERS — Rock / 90s".
             crumb = " / ".join(n.name for n in self._folder_stack[1:])
             return f"FOLDERS — {crumb}"
+        if self._level == self.RESULTS:
+            return f"MATCHES — “{self._query}”"
         if self._level == self.ARTISTS:
             return "ARTISTS"
         if self._level == self.ALBUMS:
@@ -489,6 +600,8 @@ class Browser(Widget, can_focus=True):
             if self._folder_at_root():
                 return "↑↓ move   → open   s shuffle   b artists   d dir   q quit"
             return "↑↓ move   → open   ← back   s shuffle   b artists   d dir"
+        if self._level == self.RESULTS:
+            return "↑↓ move   → play   ← all artists   s shuffle   d dir   q quit"
         if self._level == self.ARTISTS:
             return "↑↓ move   → open   s shuffle   b folders   d dir   q quit"
         return "↑↓ move   → open   ← back   s shuffle   b folders   d dir"
